@@ -6,6 +6,7 @@ import argparse
 import json
 import random
 import sys
+import shutil
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -27,6 +28,8 @@ from sklearn.metrics import (
 
 from src.data.build_eeg import EEGDataset, create_kfold_dataloaders
 from src.models.eegformer import EEGFormer
+from src.models.eegnet import EEGNet
+from src.utils.plotting import plot_fold_training_history
 
 
 def set_seed(seed: int) -> None:
@@ -56,6 +59,13 @@ def print_environment(device: torch.device) -> None:
         print("Using CPU")
 
 
+def load_checkpoint(path: Path, device: torch.device) -> dict:
+    try:
+        return torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=device)
+
+
 def to_subject_list(names) -> list[int]:
     if torch.is_tensor(names):
         return [int(x) for x in names.detach().cpu().tolist()]
@@ -69,30 +79,71 @@ def to_subject_list(names) -> list[int]:
     return output
 
 
+def compute_class_weights(loader, num_classes: int, device: torch.device):
+    subject_to_label = {}
+
+    y_epoch = loader.dataset.y.detach().cpu().numpy().tolist()
+    names = loader.dataset.names
+
+    for subject_id, label in zip(names, y_epoch):
+        subject_to_label[int(subject_id)] = int(label)
+
+    y = np.array(list(subject_to_label.values()), dtype=int)
+
+    counts = np.bincount(y, minlength=num_classes)
+    total = counts.sum()
+    safe_counts = np.maximum(counts, 1)
+
+    weights = total / (num_classes * safe_counts)
+    weights = weights / weights.mean()
+
+    weights_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
+
+    return weights_tensor, counts.tolist(), weights.tolist()
+
+
 def build_model(
     n_channels: int,
     n_samples: int,
     num_classes: int,
     args,
 ) -> torch.nn.Module:
-    return EEGFormer(
-        n_channels=n_channels,
-        n_samples=n_samples,
-        num_classes=num_classes,
-        F1=args.F1,
-        D=args.D,
-        F2=args.F2,
-        kern_length=args.kern_length,
-        pool1=args.pool1,
-        pool2=args.pool2,
-        d_model=args.d_model,
-        nhead=args.nhead,
-        dim_feedforward=args.dim_feedforward,
-        num_layers=args.num_layers,
-        dropout_eeg=args.dropout_eeg,
-        dropout_transformer=args.dropout_transformer,
-        dropout_classifier=args.dropout_classifier,
-    )
+    if args.model == "eegnet":
+        return EEGNet(
+            n_channels=n_channels,
+            n_samples=n_samples,
+            num_classes=num_classes,
+            F1=args.F1,
+            D=args.D,
+            F2=args.F2,
+            kern_length=args.kern_length,
+            pool1=args.pool1,
+            pool2=args.pool2,
+            dropout_eeg=args.dropout_eeg,
+            dropout_classifier=args.dropout_classifier,
+        )
+
+    if args.model == "eegformer":
+        return EEGFormer(
+            n_channels=n_channels,
+            n_samples=n_samples,
+            num_classes=num_classes,
+            F1=args.F1,
+            D=args.D,
+            F2=args.F2,
+            kern_length=args.kern_length,
+            pool1=args.pool1,
+            pool2=args.pool2,
+            d_model=args.d_model,
+            nhead=args.nhead,
+            dim_feedforward=args.dim_feedforward,
+            num_layers=args.num_layers,
+            dropout_eeg=args.dropout_eeg,
+            dropout_transformer=args.dropout_transformer,
+            dropout_classifier=args.dropout_classifier,
+        )
+
+    raise ValueError(f"Unknown model: {args.model}")
 
 
 def train_one_epoch(
@@ -190,10 +241,15 @@ def evaluate_subject_level(
     loader,
     device,
     num_classes: int,
+    aggregation: str = "majority_vote",
 ) -> dict:
     model.eval()
 
+    if aggregation not in {"majority_vote", "mean_prob"}:
+        raise ValueError("aggregation must be one of: majority_vote, mean_prob.")
+
     subject_probs = defaultdict(list)
+    subject_preds = defaultdict(list)
     subject_true = {}
 
     with torch.no_grad():
@@ -202,35 +258,61 @@ def evaluate_subject_level(
 
             logits = model(X)
             probs = torch.softmax(logits, dim=1).detach().cpu().numpy()
+            preds = np.argmax(probs, axis=1)
 
             y_list = y.detach().cpu().numpy().tolist()
             name_list = to_subject_list(names)
 
-            for subject_id, true_label, prob_vector in zip(name_list, y_list, probs):
+            for subject_id, true_label, pred_label, prob_vector in zip(
+                name_list,
+                y_list,
+                preds,
+                probs,
+            ):
                 subject_probs[subject_id].append(prob_vector)
+                subject_preds[subject_id].append(int(pred_label))
                 subject_true[subject_id] = int(true_label)
 
     subjects = []
     y_true = []
     y_pred = []
     y_prob = []
+    subject_details = []
 
     for subject_id in sorted(subject_true.keys()):
         mean_prob = np.mean(subject_probs[subject_id], axis=0)
-        final_pred = int(np.argmax(mean_prob))
+        votes = np.bincount(subject_preds[subject_id], minlength=num_classes)
+
+        if aggregation == "majority_vote":
+            final_pred = int(np.argmax(votes))
+        else:
+            final_pred = int(np.argmax(mean_prob))
 
         subjects.append(subject_id)
         y_true.append(subject_true[subject_id])
         y_pred.append(final_pred)
         y_prob.append(mean_prob)
 
+        subject_details.append(
+            {
+                "subject_id": int(subject_id),
+                "true_label": int(subject_true[subject_id]),
+                "pred_label": int(final_pred),
+                "votes": votes.astype(int).tolist(),
+                "mean_prob": mean_prob.tolist(),
+                "n_epochs": int(np.sum(votes)),
+            }
+        )
+
     y_prob = np.asarray(y_prob)
 
     metrics = {
+        "aggregation": aggregation,
         "subjects": subjects,
         "y_true": y_true,
         "y_pred": y_pred,
         "y_prob": y_prob.tolist(),
+        "subject_details": subject_details,
         "accuracy": accuracy_score(y_true, y_pred),
         "balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
         "macro_precision": precision_score(
@@ -314,6 +396,8 @@ def save_checkpoint(
     train_subjects: list[int],
     val_subjects: list[int],
     test_subjects: list[int],
+    class_weights: list[float] | None,
+    train_label_counts: list[int],
 ) -> None:
     torch.save(
         {
@@ -326,6 +410,9 @@ def save_checkpoint(
             "history": history,
             "args": vars(args),
             "condition": args.condition,
+            "aggregation": args.aggregation,
+            "class_weights": class_weights,
+            "train_label_counts": train_label_counts,
             "n_channels": n_channels,
             "n_samples": n_samples,
             "num_classes": num_classes,
@@ -341,16 +428,33 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--condition", type=str, default="complete")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="eegformer",
+        choices=["eegformer", "eegnet"],
+    )
+    parser.add_argument(
+        "--aggregation",
+        type=str,
+        default="majority_vote",
+        choices=["majority_vote", "mean_prob"],
+    )
+    
+
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=3407)
-    parser.add_argument("--save_dir", type=str, default="models/eegformer_eeg_only")
+    parser.add_argument("--save_root", type=str, default="models")
+    parser.add_argument("--experiment_name", type=str, default="eeg_baseline")
+    parser.add_argument("--scale_to_uv", action="store_true")
 
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--start_fold", type=int, default=1)
+    parser.add_argument("--no_class_weights", action="store_true")
 
     parser.add_argument("--F1", type=int, default=8)
     parser.add_argument("--D", type=int, default=2)
@@ -379,10 +483,17 @@ if __name__ == "__main__":
     device = get_device()
     print_environment(device)
 
-    save_dir = PROJECT_ROOT / args.save_dir / args.condition
+    save_dir = PROJECT_ROOT / args.save_root / args.experiment_name / args.model / args.condition / args.aggregation
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = EEGDataset(condition=args.condition)
+    config_path = PROJECT_ROOT / "configs" / "preprocessing.yaml"
+    shutil.copy2(config_path, save_dir / "preprocessing.yaml")
+
+    dataset = EEGDataset(
+        condition=args.condition,
+        scale_to_uv=args.scale_to_uv,
+    )
+
     summary = dataset.get_summary_dataframe()
 
     n_channels = int(summary["n_channels"].iloc[0])
@@ -391,7 +502,9 @@ if __name__ == "__main__":
     total_epochs = int(sum(shape[0] for shape in summary["selected_shape"].tolist()))
 
     print("\nDataset")
+    print(f"Model: {args.model}")
     print(f"Condition: {args.condition}")
+    print(f"Aggregation: {args.aggregation}")
     print(f"Subjects: {len(dataset)}")
     print(f"Class distribution: {dict(summary['label_name'].value_counts())}")
     print(f"Selected EEG shape: ({total_epochs}, {n_channels}, {n_samples})")
@@ -436,10 +549,29 @@ if __name__ == "__main__":
             weight_decay=args.weight_decay,
         )
 
-        criterion = torch.nn.CrossEntropyLoss()
+        if args.no_class_weights:
+            class_weights_tensor = None
+            train_label_counts = np.bincount(
+                train_loader.dataset.y.detach().cpu().numpy(),
+                minlength=num_classes,
+            ).tolist()
+            class_weights_list = None
+            print("Class weights: disabled")
+        else:
+            class_weights_tensor, train_label_counts, class_weights_list = compute_class_weights(
+                loader=train_loader,
+                num_classes=num_classes,
+                device=device,
+            )
+            print(f"Train label counts: {train_label_counts}")
+            print(f"Class weights: {[round(w, 4) for w in class_weights_list]}")
+
+        criterion = torch.nn.CrossEntropyLoss(weight=class_weights_tensor)
 
         best_model_path = save_dir / f"fold_{fold_idx:02d}_best.pt"
         last_model_path = save_dir / f"fold_{fold_idx:02d}_last.pt"
+        history_csv_path = save_dir / f"fold_{fold_idx:02d}_history.csv"
+        history_plot_path = save_dir / f"fold_{fold_idx:02d}_training_plot.png"
 
         start_epoch = 1
         best_epoch = 0
@@ -447,7 +579,7 @@ if __name__ == "__main__":
         history = []
 
         if args.resume and last_model_path.exists():
-            checkpoint = torch.load(last_model_path, map_location=device)
+            checkpoint = load_checkpoint(last_model_path, device)
 
             model.load_state_dict(checkpoint["model_state_dict"])
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -488,6 +620,7 @@ if __name__ == "__main__":
                     loader=val_loader,
                     device=device,
                     num_classes=num_classes,
+                    aggregation=args.aggregation,
                 )
 
                 current_val_bacc = val_subject_metrics["balanced_accuracy"]
@@ -501,6 +634,7 @@ if __name__ == "__main__":
                     "val_subject_accuracy": val_subject_metrics["accuracy"],
                     "val_subject_balanced_accuracy": val_subject_metrics["balanced_accuracy"],
                     "val_subject_macro_f1": val_subject_metrics["macro_f1"],
+                    "aggregation": args.aggregation,
                 }
 
                 history.append(row)
@@ -533,6 +667,8 @@ if __name__ == "__main__":
                         train_subjects=train_subjects,
                         val_subjects=val_subjects,
                         test_subjects=test_subjects,
+                        class_weights=class_weights_list,
+                        train_label_counts=train_label_counts,
                     )
 
                 save_checkpoint(
@@ -551,19 +687,26 @@ if __name__ == "__main__":
                     train_subjects=train_subjects,
                     val_subjects=val_subjects,
                     test_subjects=test_subjects,
+                    class_weights=class_weights_list,
+                    train_label_counts=train_label_counts,
                 )
 
-                pd.DataFrame(history).to_csv(
-                    save_dir / f"fold_{fold_idx:02d}_history.csv",
-                    index=False,
-                )
+                pd.DataFrame(history).to_csv(history_csv_path, index=False)
+
         else:
             print(f"Fold {fold_idx} already reached epoch {start_epoch - 1}.")
+
+        if history_csv_path.exists():
+            plot_fold_training_history(
+                history_csv=history_csv_path,
+                output_path=history_plot_path,
+            )
+            print(f"Saved training plot: {history_plot_path}")
 
         if not best_model_path.exists():
             best_model_path = last_model_path
 
-        checkpoint = torch.load(best_model_path, map_location=device)
+        checkpoint = load_checkpoint(best_model_path, device)
         model.load_state_dict(checkpoint["model_state_dict"])
 
         test_subject_metrics = evaluate_subject_level(
@@ -571,6 +714,7 @@ if __name__ == "__main__":
             loader=test_loader,
             device=device,
             num_classes=num_classes,
+            aggregation=args.aggregation,
         )
 
         cm = np.asarray(test_subject_metrics["confusion_matrix"])
@@ -580,6 +724,9 @@ if __name__ == "__main__":
             "fold": fold_idx,
             "best_epoch": best_epoch,
             "best_val_subject_balanced_accuracy": best_val_bacc,
+            "aggregation": args.aggregation,
+            "train_label_counts": train_label_counts,
+            "class_weights": class_weights_list,
             "test_subject_accuracy": test_subject_metrics["accuracy"],
             "test_subject_balanced_accuracy": test_subject_metrics["balanced_accuracy"],
             "test_subject_macro_precision": test_subject_metrics["macro_precision"],
@@ -589,8 +736,11 @@ if __name__ == "__main__":
             "test_subjects": test_subject_metrics["subjects"],
             "test_y_true": test_subject_metrics["y_true"],
             "test_y_pred": test_subject_metrics["y_pred"],
+            "test_subject_details": test_subject_metrics["subject_details"],
             "test_confusion_matrix": test_subject_metrics["confusion_matrix"],
             "model_path": str(best_model_path),
+            "history_csv": str(history_csv_path),
+            "training_plot": str(history_plot_path),
         }
 
         all_fold_results.append(fold_result)
@@ -601,6 +751,15 @@ if __name__ == "__main__":
             f"BAcc={fold_result['test_subject_balanced_accuracy']:.4f} | "
             f"MacroF1={fold_result['test_subject_macro_f1']:.4f}"
         )
+
+        print("Test subject vote counts")
+        for item in test_subject_metrics["subject_details"]:
+            print(
+                f"  ID{item['subject_id']} | "
+                f"true={item['true_label']} | "
+                f"pred={item['pred_label']} | "
+                f"votes={item['votes']}"
+            )
 
         save_json(save_dir / f"fold_{fold_idx:02d}_test_metrics.json", fold_result)
 
@@ -622,8 +781,12 @@ if __name__ == "__main__":
     save_json(
         save_dir / "global_summary.json",
         {
+            "model": args.model,
             "condition": args.condition,
+            "aggregation": args.aggregation,
             "num_folds": args.k,
+            "config_path": str(config_path),
+            "scale_to_uv": args.scale_to_uv,
             "global_confusion_matrix": global_cm.tolist(),
             "save_dir": str(save_dir),
         },

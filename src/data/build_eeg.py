@@ -417,9 +417,9 @@ def create_kfold_dataloaders(dataset, k=10, batch_size=32, shuffle=True):
         eeg_data, labels, groups=subjects
     ):
 
-        # -------- Split TRAIN / VAL (10% del train) --------
+        # -------- Split TRAIN / VAL --------
         inner_gkf = StratifiedGroupKFold(
-            n_splits=5,   # o el número que quieras
+            n_splits=5,   
             shuffle=True,
             random_state=3407
         )
