@@ -2,161 +2,128 @@ from __future__ import annotations
 
 from pathlib import Path
 from collections import Counter
-import sys
-import warnings
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 import mne
-import numpy as np
 import pandas as pd
 import torch
 
 from sklearn.model_selection import StratifiedGroupKFold
 from torch.utils.data import Dataset, DataLoader
 
-from src.utils import (
-    find_project_root,
+from src.utils.eeg_utils import (
     load_yaml,
     extract_subject_id,
     normalize_condition,
-    assign_epoch_conditions,
     build_label_table,
+    pick_eeg_channels,
+    replace_non_finite_raw_values,
+    build_epoch_metadata,
 )
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "preprocessing.yaml"
+EYES_SPLIT_SEC = 300.0
 
 
 class EEGDataset(Dataset):
     def __init__(
         self,
-        root: str | Path | None = None,
-        raw_dir: str | Path | None = None,
-        config_path: str | Path | None = None,
-        questionnaire_path: str | Path | None = None,
-        condition: str = "complete",
+        config_path: str | Path = DEFAULT_CONFIG_PATH,
+        eeg_raw: str | Path | None = None,
+        questionnaire: str | Path | None = None,
         lowcut: float | None = None,
         highcut: float | None = None,
         notch: float | None = None,
-        window_duration: float | None = None,
+        window: float | None = None,
         overlap: float | None = None,
-        target_fs: float | None = None,
-        eyes_split_sec: float = 300.0,
-        scale_to_uv: bool = False,
-        reject_by_annotation: bool = False,
-        strict_labels: bool = True,
-        pick_channels: list[str] | None = None,
-        exclude_channels: list[str] | None = None,
+        condition: str | None = None,
     ):
-        self.root = Path(root).resolve() if root is not None else find_project_root()
+        self.config_path = Path(config_path)
 
-        self.config_path = (
-            Path(config_path).resolve()
-            if config_path is not None
-            else self.root / "configs" / "preprocessing.yaml"
+        if not self.config_path.is_absolute():
+            self.config_path = PROJECT_ROOT / self.config_path
+
+        cfg = load_yaml(self.config_path)
+
+        eeg_cfg = cfg["eeg"]
+        questionnaire_cfg = cfg["questionnaire"]
+
+        self.eeg_raw = (
+            Path(eeg_raw)
+            if eeg_raw is not None
+            else PROJECT_ROOT / eeg_cfg["raw_data_dir"]
         )
 
-        self.cfg = load_yaml(self.config_path)
-
-        eeg_cfg = self.cfg.get("eeg", {})
-        questionnaire_cfg = self.cfg.get("questionnaire", {})
-
-        self.raw_dir = (
-            Path(raw_dir).resolve()
-            if raw_dir is not None
-            else self.root / eeg_cfg.get("raw_data_dir", "data/raw")
+        self.questionnaire = (
+            Path(questionnaire)
+            if questionnaire is not None
+            else PROJECT_ROOT / questionnaire_cfg["raw_data_path"]
         )
 
-        self.questionnaire_path = (
-            Path(questionnaire_path).resolve()
-            if questionnaire_path is not None
-            else self.root
-            / questionnaire_cfg.get("raw_data_path", "data/raw/Demo_Questionnaires.xlsx")
-        )
+        self.lowcut = lowcut if lowcut is not None else eeg_cfg.get("lowcut", 1.0)
+        self.highcut = highcut if highcut is not None else eeg_cfg.get("highcut", 25.0)
+        self.notch = notch if notch is not None else eeg_cfg.get("notch", None)
 
-        self.condition = normalize_condition(condition)
-
-        self.lowcut = lowcut if lowcut is not None else eeg_cfg.get("lowcut", 0.5)
-        self.highcut = highcut if highcut is not None else eeg_cfg.get("highcut", 60.0)
-        self.notch = notch if notch is not None else eeg_cfg.get("notch", 50.0)
-
-        self.window_duration = (
-            window_duration
-            if window_duration is not None
+        self.window = (
+            window
+            if window is not None
             else eeg_cfg.get("window_duration", eeg_cfg.get("window", 2.0))
         )
 
         self.overlap = overlap if overlap is not None else eeg_cfg.get("overlap", 0.5)
-        self.target_fs = target_fs if target_fs is not None else eeg_cfg.get("target_fs", None)
+        self.target_fs = eeg_cfg.get("target_fs", 128)
+        self.scale_to_uv = bool(eeg_cfg.get("scale_to_uv", True))
 
-        self.eyes_split_sec = eyes_split_sec
-        self.scale_to_uv = scale_to_uv
-        self.reject_by_annotation = reject_by_annotation
-        self.strict_labels = strict_labels
-        self.pick_channels = pick_channels
-        self.exclude_channels = exclude_channels or []
-
-        if not self.raw_dir.exists():
-            raise FileNotFoundError(f"Missing raw EEG directory: {self.raw_dir}")
-
-        if not self.questionnaire_path.exists():
-            raise FileNotFoundError(f"Missing questionnaire file: {self.questionnaire_path}")
-
-        if not (0 <= self.overlap < 1):
-            raise ValueError("overlap must be in [0, 1).")
-
-        self.label_table = build_label_table(
-            questionnaire_path=self.questionnaire_path,
-            questionnaire_cfg=questionnaire_cfg,
+        yaml_condition = eeg_cfg.get("condition", "complete")
+        self.condition = normalize_condition(
+            condition if condition is not None else yaml_condition
         )
+
+        self.label_table = build_label_table(self.questionnaire)
 
         self.id_to_label_code = dict(
             zip(
-                self.label_table["subject_id"].astype(int),
-                self.label_table["pain_scale_code"].astype(int),
+                self.label_table["subject_id"],
+                self.label_table["pain_scale_code"],
             )
         )
 
         self.id_to_label_name = dict(
             zip(
-                self.label_table["subject_id"].astype(int),
-                self.label_table["pain_scale_label"].astype(str),
+                self.label_table["subject_id"],
+                self.label_table["pain_scale_label"],
             )
         )
 
         self.samples = []
-        self._load_samples()
+        self._load_subjects()
 
         if len(self.samples) == 0:
             raise ValueError("No EEG subjects were loaded.")
 
-    def _load_samples(self) -> None:
-        gdf_files = sorted(self.raw_dir.glob("*.gdf"))
+    def _load_subjects(self):
+        gdf_files = sorted(self.eeg_raw.glob("*.gdf"))
 
-        if not gdf_files:
-            raise FileNotFoundError(f"No .gdf files were found in {self.raw_dir}")
+        if len(gdf_files) == 0:
+            raise FileNotFoundError(f"No .gdf files were found in {self.eeg_raw}")
 
         for file_path in gdf_files:
             subject_id = extract_subject_id(file_path)
 
             if subject_id not in self.id_to_label_code:
-                message = f"Subject ID{subject_id} has no pain-scale label."
-
-                if self.strict_labels:
-                    raise ValueError(message)
-
-                warnings.warn(message)
                 continue
 
             eeg_data, metadata = self._process_gdf(file_path)
+
+            if eeg_data is None:
+                continue
 
             self.samples.append(
                 {
                     "subject_id": subject_id,
                     "file": file_path.name,
-                    "path": str(file_path),
-                    "eeg_complete": torch.tensor(eeg_data, dtype=torch.float32),
+                    "eeg": torch.tensor(eeg_data, dtype=torch.float32),
                     "label": torch.tensor(
                         self.id_to_label_code[subject_id],
                         dtype=torch.long,
@@ -166,173 +133,83 @@ class EEGDataset(Dataset):
                 }
             )
 
-    def _process_gdf(self, file_path: Path) -> tuple[np.ndarray, dict]:
+    def _process_gdf(self, file_path: Path):
         raw = mne.io.read_raw_gdf(
             str(file_path),
             preload=True,
             verbose=False,
         )
 
-        raw = self._select_channels(raw)
+        raw = pick_eeg_channels(raw)
+        raw = replace_non_finite_raw_values(raw)
 
         original_sfreq = float(raw.info["sfreq"])
         original_duration_sec = raw.n_times / original_sfreq
 
-        data = raw.get_data()
-
-        if not np.isfinite(data).all():
-            warnings.warn(f"NaN or Inf detected in {file_path.name}. Replacing values with zero.")
-            raw._data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
-
         raw.set_eeg_reference("average", verbose=False)
 
-        nyquist = float(raw.info["sfreq"]) / 2.0
-
-        if self.notch is not None and self.notch < nyquist:
-            raw.notch_filter(freqs=[self.notch], verbose=False)
-
-        highcut = self.highcut
-
-        if highcut is not None and highcut >= nyquist:
-            highcut = nyquist - 1.0
-            warnings.warn(f"Adjusted highcut for {file_path.name} to {highcut:.2f} Hz.")
+        if self.notch is not None:
+            raw.notch_filter([self.notch], verbose=False)
 
         raw.filter(
-            l_freq=self.lowcut,
-            h_freq=highcut,
+            self.lowcut,
+            self.highcut,
             fir_design="firwin",
             verbose=False,
         )
 
-        if self.target_fs is not None and float(self.target_fs) != float(raw.info["sfreq"]):
-            raw.resample(float(self.target_fs), npad="auto", verbose=False)
+        if self.target_fs is not None and float(raw.info["sfreq"]) != float(self.target_fs):
+            raw.resample(
+                float(self.target_fs),
+                npad="auto",
+                verbose=False,
+            )
 
-        sfreq = float(raw.info["sfreq"])
-        duration_sec = raw.n_times / sfreq
-        overlap_sec = self.window_duration * self.overlap
+        step = self.window * (1 - self.overlap)
 
         epochs = mne.make_fixed_length_epochs(
             raw,
-            duration=self.window_duration,
-            overlap=overlap_sec,
+            duration=self.window,
+            overlap=self.window - step,
             preload=True,
-            reject_by_annotation=self.reject_by_annotation,
             verbose=False,
         )
 
         eeg_data = epochs.get_data()
 
         if eeg_data.size == 0:
-            raise ValueError(f"No epochs were generated for {file_path.name}.")
+            print(f"No epochs were generated for {file_path}")
+            return None, None
 
         if self.scale_to_uv:
             eeg_data = eeg_data * 1e6
 
-        epoch_start_sec = (epochs.events[:, 0].astype(float) - float(raw.first_samp)) / sfreq
-        epoch_start_sec = np.maximum(epoch_start_sec, 0.0)
-        epoch_end_sec = epoch_start_sec + self.window_duration
-
-        condition_labels = assign_epoch_conditions(
-            epoch_start_sec=epoch_start_sec,
-            epoch_end_sec=epoch_end_sec,
-            eyes_split_sec=self.eyes_split_sec,
+        metadata = build_epoch_metadata(
+            eeg_data=eeg_data,
+            epochs=epochs,
+            raw=raw,
+            original_sfreq=original_sfreq,
+            original_duration_sec=original_duration_sec,
+            window=self.window,
+            overlap=self.overlap,
+            eyes_split_sec=EYES_SPLIT_SEC,
         )
-
-        complete_mask = np.ones(len(condition_labels), dtype=bool)
-        open_mask = condition_labels == "open"
-        closed_mask = condition_labels == "closed"
-        transition_mask = condition_labels == "transition"
-
-        metadata = {
-            "file": file_path.name,
-            "original_sfreq": original_sfreq,
-            "sfreq": sfreq,
-            "original_duration_sec": original_duration_sec,
-            "duration_sec": duration_sec,
-            "n_channels": int(eeg_data.shape[1]),
-            "n_samples": int(eeg_data.shape[2]),
-            "complete_n_epochs": int(np.sum(complete_mask)),
-            "open_n_epochs": int(np.sum(open_mask)),
-            "closed_n_epochs": int(np.sum(closed_mask)),
-            "transition_n_epochs": int(np.sum(transition_mask)),
-            "complete_shape": tuple(eeg_data[complete_mask].shape),
-            "open_shape": tuple(eeg_data[open_mask].shape),
-            "closed_shape": tuple(eeg_data[closed_mask].shape),
-            "window_duration": float(self.window_duration),
-            "overlap": float(self.overlap),
-            "overlap_sec": float(overlap_sec),
-            "eyes_split_sec": float(self.eyes_split_sec),
-            "channel_names": raw.ch_names,
-            "epoch_start_sec": epoch_start_sec,
-            "epoch_end_sec": epoch_end_sec,
-            "condition_labels": condition_labels,
-            "condition_masks": {
-                "complete": complete_mask,
-                "open": open_mask,
-                "closed": closed_mask,
-            },
-        }
 
         return eeg_data, metadata
 
-    def _select_channels(self, raw):
-        if self.pick_channels is not None:
-            missing = [
-                channel
-                for channel in self.pick_channels
-                if channel not in raw.ch_names
-            ]
-
-            if missing:
-                raise ValueError(f"Missing requested channels: {missing}")
-
-            raw.pick(self.pick_channels)
-            return raw
-
-        existing_exclusions = [
-            channel
-            for channel in self.exclude_channels
-            if channel in raw.ch_names
-        ]
-
-        if existing_exclusions:
-            raw.drop_channels(existing_exclusions)
-
-        channel_types = raw.get_channel_types()
-
-        eeg_channels = [
-            channel
-            for channel, channel_type in zip(raw.ch_names, channel_types)
-            if channel_type == "eeg"
-        ]
-
-        if not eeg_channels:
-            raw.set_channel_types({channel: "eeg" for channel in raw.ch_names})
-            eeg_channels = raw.ch_names
-
-        raw.pick(eeg_channels)
-
-        return raw
-
-    def set_condition(self, condition: str) -> None:
-        self.condition = normalize_condition(condition)
-
-    def get_eeg(self, idx: int, condition: str | None = None) -> torch.Tensor:
-        condition = self.condition if condition is None else normalize_condition(condition)
-
+    def get_eeg(self, idx: int):
         sample = self.samples[idx]
-        mask = sample["metadata"]["condition_masks"][condition]
-        indices = np.where(mask)[0]
+        mask = sample["metadata"]["condition_masks"][self.condition]
 
-        return sample["eeg_complete"][indices]
+        return sample["eeg"][mask]
 
-    def get_subject_ids(self) -> list[int]:
+    def get_subject_ids(self):
         return [sample["subject_id"] for sample in self.samples]
 
-    def get_labels(self) -> list[int]:
+    def get_labels(self):
         return [int(sample["label"].item()) for sample in self.samples]
 
-    def get_summary_dataframe(self) -> pd.DataFrame:
+    def get_summary_dataframe(self):
         rows = []
 
         for idx, sample in enumerate(self.samples):
@@ -364,16 +241,20 @@ class EEGDataset(Dataset):
 
         return pd.DataFrame(rows)
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
         sample = self.samples[idx]
-        return sample["subject_id"], self.get_eeg(idx), sample["label"]
+
+        return (
+            sample["subject_id"],
+            self.get_eeg(idx),
+            sample["label"],
+        )
 
 
 def create_kfold_dataloaders(dataset, k=10, batch_size=32, shuffle=True):
-
     subjects, labels, eeg_data = [], [], []
 
     for i in range(len(dataset)):
@@ -385,8 +266,9 @@ def create_kfold_dataloaders(dataset, k=10, batch_size=32, shuffle=True):
     outer_gkf = StratifiedGroupKFold(
         n_splits=k,
         shuffle=True,
-        random_state=3407
+        random_state=3407,
     )
+
     folds = []
 
     class FoldDataset(Dataset):
@@ -412,46 +294,48 @@ def create_kfold_dataloaders(dataset, k=10, batch_size=32, shuffle=True):
         def __getitem__(self, idx):
             return self.X[idx], self.y[idx], self.names[idx]
 
-    # ================= OUTER LOOP =================
     for trainval_idx, test_idx in outer_gkf.split(
-        eeg_data, labels, groups=subjects
+        eeg_data,
+        labels,
+        groups=subjects,
     ):
-
-        # -------- Split TRAIN / VAL --------
         inner_gkf = StratifiedGroupKFold(
-            n_splits=5,   
+            n_splits=5,
             shuffle=True,
-            random_state=3407
+            random_state=3407,
         )
 
         train_idx, val_idx = next(
             inner_gkf.split(
                 [eeg_data[i] for i in trainval_idx],
                 [labels[i] for i in trainval_idx],
-                groups=[subjects[i] for i in trainval_idx]
+                groups=[subjects[i] for i in trainval_idx],
             )
         )
 
-
         train_subjects = [trainval_idx[i] for i in train_idx]
-        val_subjects   = [trainval_idx[i] for i in val_idx]
+        val_subjects = [trainval_idx[i] for i in val_idx]
 
-        # -------- Datasets --------
         train_dataset = FoldDataset(eeg_data, labels, train_subjects)
-        val_dataset   = FoldDataset(eeg_data, labels, val_subjects)
-        test_dataset  = FoldDataset(eeg_data, labels, test_idx)
+        val_dataset = FoldDataset(eeg_data, labels, val_subjects)
+        test_dataset = FoldDataset(eeg_data, labels, test_idx)
 
-        # -------- Dataloaders --------
         train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=shuffle
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
         )
 
         val_loader = DataLoader(
-            val_dataset, batch_size=batch_size, shuffle=False
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
         )
 
         test_loader = DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
         )
 
         folds.append((train_loader, val_loader, test_loader))
@@ -464,32 +348,24 @@ if __name__ == "__main__":
     summary = dataset.get_summary_dataframe()
 
     print("\nEEG dataset")
-    print(f"Subjects: {len(dataset)}")
-    print(f"Raw EEG directory: {dataset.raw_dir}")
-    print(f"Questionnaire: {dataset.questionnaire_path}")
     print(f"Selected condition: {dataset.condition}")
+    print(f"Subjects: {len(dataset)}")
+    print(f"Config path: {dataset.config_path}")
 
     print("\nSignal configuration")
-    print(f"Original sampling frequency: {summary['original_sfreq'].unique().tolist()}")
-    print(f"Final sampling frequency: {summary['sfreq'].unique().tolist()}")
+    print(f"Original fs: {summary['original_sfreq'].unique().tolist()}")
+    print(f"Final fs: {summary['sfreq'].unique().tolist()}")
     print(f"Channels: {summary['n_channels'].unique().tolist()}")
     print(f"Samples per epoch: {summary['n_samples'].unique().tolist()}")
-    print(f"Window duration: {dataset.window_duration} s")
+    print(f"Window: {dataset.window} s")
     print(f"Overlap: {dataset.overlap}")
-    print(f"Eyes split: {dataset.eyes_split_sec} s")
+    print(f"Lowcut: {dataset.lowcut}")
+    print(f"Highcut: {dataset.highcut}")
+    print(f"Notch: {dataset.notch}")
+    print(f"Scale to uV: {dataset.scale_to_uv}")
 
     print("\nClass distribution")
-    class_counts = summary["label_name"].value_counts()
-    for label_name, count in class_counts.items():
-        print(f"{label_name}: {count}")
-
-    print("\nDuration")
-    print(
-        "seconds min/median/max:",
-        round(summary["duration_sec"].min(), 3),
-        round(summary["duration_sec"].median(), 3),
-        round(summary["duration_sec"].max(), 3),
-    )
+    print(summary["label_name"].value_counts())
 
     print("\nCondition sizes")
     for condition, column in [
@@ -501,60 +377,40 @@ if __name__ == "__main__":
         n_channels = int(summary["n_channels"].iloc[0])
         n_samples = int(summary["n_samples"].iloc[0])
 
-        print(f"{condition}")
-        print(f"  total shape: ({total_epochs}, {n_channels}, {n_samples})")
-        print(
-            "  epochs per subject min/median/max:",
-            int(summary[column].min()),
-            int(summary[column].median()),
-            int(summary[column].max()),
-        )
-
-    print("\nTransition epochs")
-    print(f"Total: {int(summary['transition_n_epochs'].sum())}")
-    print(
-        "Per subject min/median/max:",
-        int(summary["transition_n_epochs"].min()),
-        int(summary["transition_n_epochs"].median()),
-        int(summary["transition_n_epochs"].max()),
-    )
+        print(f"{condition}: ({total_epochs}, {n_channels}, {n_samples})")
 
     folds = create_kfold_dataloaders(
         dataset,
-        k=10,
+        k=5,
         batch_size=32,
         shuffle=True,
     )
 
-    print("\nK-fold check")
-    print(f"Number of folds: {len(folds)}")
-
     train_loader, val_loader, test_loader = folds[0]
 
-    split_loaders = {
+    print("\nFold 1")
+    for split_name, loader in {
         "train": train_loader,
         "val": val_loader,
         "test": test_loader,
-    }
-
-    print("\nFold 1")
-    for split_name, loader in split_loaders.items():
+    }.items():
         X = loader.dataset.X
         y = loader.dataset.y
         names = loader.dataset.names
 
         subject_ids = sorted(set(int(subject) for subject in names))
-        label_counts = Counter(y.tolist())
+        epoch_label_counts = Counter(y.tolist())
+
+        subject_to_label = {}
+
+        for subject, label in zip(names, y.tolist()):
+            subject_to_label[int(subject)] = int(label)
+
+        subject_label_counts = Counter(subject_to_label.values())
 
         print(f"{split_name}")
-        print(f"  subjects ({len(subject_ids)}): {', '.join(f'ID{s}' for s in subject_ids)}")
+        print(f"  subjects: {subject_ids}")
         print(f"  X shape: {tuple(X.shape)}")
         print(f"  y shape: {tuple(y.shape)}")
-        print(f"  label counts: {dict(label_counts)}")
-
-    X_batch, y_batch, subject_batch = next(iter(train_loader))
-
-    print("\nFirst train batch")
-    print(f"X shape: {tuple(X_batch.shape)}")
-    print(f"y shape: {tuple(y_batch.shape)}")
-    print(f"subjects in batch: {sorted(set(int(s) for s in subject_batch.tolist()))}")
+        print(f"  epoch label counts: {dict(epoch_label_counts)}")
+        print(f"  subject label counts: {dict(subject_label_counts)}")

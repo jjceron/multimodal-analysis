@@ -1,4 +1,23 @@
-# Preprocessing configuration file
+## EEG preprocessing
+eeg:
+  # Entry and output paths
+  raw_data_dir: "data/raw"
+  output_dir: "data/processed/EEG"
+
+  # Frequency bands (Hz)
+  lowcut: 0.5
+  highcut: 45.0
+  notch: null
+  
+  # Epoching parameters
+  window_duration: 2.0  # seconds
+  overlap: 0.5          
+  
+  # Resampling frequency
+  target_fs: 128
+ 
+  # Scale to μV  
+  scale_to_uv: true
 
 ## Questionnaire preprocessing
 questionnaire:
@@ -42,22 +61,3 @@ questionnaire:
     - "Do you go regularly to phsychological or emotional counseling sessions for your pain?"
     - "Do you suffer from any neurological disorder? (eg. epilepsy, Alzheimer, tinnitus)"
     - "Have you suffered any head traumatism? "
-  
-## EEG preprocessing
-
-eeg:
-  # Entry and output paths
-  raw_data_dir: "data/raw"
-  output_dir: "data/processed/EEG"
-
-  # Frequency bands (Hz)
-  lowcut: 1.0
-  highcut: 25.0
-  notch: null
-  
-  # Epoching parameters
-  window_duration: 2.0  # seconds
-  overlap: 0.5          
-  
-  # Resampling frequency
-  target_fs: 128

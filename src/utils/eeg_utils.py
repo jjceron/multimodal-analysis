@@ -1,10 +1,18 @@
+from __future__ import annotations
+
 from pathlib import Path
 import re
 
+import yaml
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedGroupKFold
-from collections import Counter
+
+
+def load_yaml(path: str | Path) -> dict:
+    path = Path(path)
+
+    with path.open("r", encoding="utf-8") as file:
+        return yaml.safe_load(file)
 
 
 def extract_subject_id(file_path: str | Path) -> int:
@@ -13,7 +21,7 @@ def extract_subject_id(file_path: str | Path) -> int:
     match = re.search(r"ID(\d+)", file_path.stem, flags=re.IGNORECASE)
 
     if match is None:
-        raise ValueError(f"Could not extract subject ID from {file_path.name}.")
+        raise ValueError(f"Could not extract subject ID from {file_path.name}")
 
     return int(match.group(1))
 
@@ -22,15 +30,15 @@ def normalize_condition(condition: str) -> str:
     condition = condition.lower().strip()
 
     aliases = {
+        "complete": "complete",
         "all": "complete",
         "full": "complete",
-        "complete": "complete",
         "open": "open",
         "closed": "closed",
     }
 
     if condition not in aliases:
-        raise ValueError("condition must be one of: complete, all, full, open, closed.")
+        raise ValueError("condition must be one of: complete, open, closed")
 
     return aliases[condition]
 
@@ -38,7 +46,7 @@ def normalize_condition(condition: str) -> str:
 def assign_epoch_conditions(
     epoch_start_sec: np.ndarray,
     epoch_end_sec: np.ndarray,
-    eyes_split_sec: float,
+    eyes_split_sec: float = 300.0,
 ) -> np.ndarray:
     labels = np.full(len(epoch_start_sec), "transition", dtype=object)
 
@@ -48,52 +56,53 @@ def assign_epoch_conditions(
     return labels
 
 
-def build_label_table(questionnaire_path, questionnaire_cfg) -> pd.DataFrame:
-    id_col = questionnaire_cfg.get("id_column", "ID")
-    pain_col = questionnaire_cfg["pain_scale"]["source_column"]
-    bins = questionnaire_cfg["pain_scale"]["bins"]
-    labels = questionnaire_cfg["pain_scale"]["labels"]
+def build_condition_masks(condition_labels: np.ndarray) -> dict[str, np.ndarray]:
+    complete_mask = np.ones(len(condition_labels), dtype=bool)
+    open_mask = condition_labels == "open"
+    closed_mask = condition_labels == "closed"
+    transition_mask = condition_labels == "transition"
 
+    return {
+        "complete": complete_mask,
+        "open": open_mask,
+        "closed": closed_mask,
+        "transition": transition_mask,
+    }
+
+
+def build_label_table(questionnaire_path: str | Path) -> pd.DataFrame:
     df = pd.read_excel(questionnaire_path)
 
-    rows_to_drop = questionnaire_cfg.get("rows_to_drop", [])
-    if rows_to_drop:
-        df = df.drop(index=rows_to_drop, errors="ignore")
+    id_col = "ID"
+    pain_col = "Pain Score (Actual Pain of Brief Pain Inventory)"
 
-    if id_col not in df.columns:
-        raise KeyError(f"Column not found in questionnaire: {id_col}")
-
-    if pain_col not in df.columns:
-        raise KeyError(f"Column not found in questionnaire: {pain_col}")
-
-    subject_ids = pd.to_numeric(df[id_col], errors="coerce").astype("Int64")
+    subject_ids = pd.to_numeric(df[id_col], errors="coerce")
     pain_scores = pd.to_numeric(df[pain_col], errors="coerce")
 
     pain_labels = pd.cut(
         pain_scores,
-        bins=bins,
-        labels=labels,
+        bins=[0, 3, 6, 10],
+        labels=["low", "moderate", "severe"],
         include_lowest=True,
     )
 
     pain_codes = pd.Categorical(
         pain_labels,
-        categories=labels,
+        categories=["low", "moderate", "severe"],
         ordered=True,
     ).codes
-
-    pain_codes = pd.Series(pain_codes, index=df.index).replace({-1: pd.NA}).astype("Int64")
 
     label_table = pd.DataFrame(
         {
             "subject_id": subject_ids,
+            "pain_scale": pain_scores,
             "pain_scale_label": pain_labels.astype("string"),
             "pain_scale_code": pain_codes,
         }
     )
 
     label_table = label_table.dropna(
-        subset=["subject_id", "pain_scale_label", "pain_scale_code"]
+        subset=["subject_id", "pain_scale", "pain_scale_label"]
     ).copy()
 
     label_table["subject_id"] = label_table["subject_id"].astype(int)
@@ -102,130 +111,94 @@ def build_label_table(questionnaire_path, questionnaire_cfg) -> pd.DataFrame:
     duplicated = label_table["subject_id"].duplicated(keep=False)
 
     if duplicated.any():
-        duplicated_ids = sorted(label_table.loc[duplicated, "subject_id"].unique().tolist())
+        duplicated_ids = sorted(
+            label_table.loc[duplicated, "subject_id"].unique().tolist()
+        )
         raise ValueError(f"Duplicate subject IDs in questionnaire: {duplicated_ids}")
 
     return label_table
 
 
-def summarize_dataset_sizes(dataset) -> pd.DataFrame:
-    summary = dataset.get_summary_dataframe()
+def pick_eeg_channels(raw):
+    eeg_channels = [
+        channel
+        for channel, channel_type in zip(raw.ch_names, raw.get_channel_types())
+        if channel_type == "eeg"
+    ]
 
-    rows = []
-
-    for condition, epoch_col in [
-        ("complete", "complete_n_epochs"),
-        ("open", "open_n_epochs"),
-        ("closed", "closed_n_epochs"),
-    ]:
-        total_epochs = int(summary[epoch_col].sum())
-        n_channels = int(summary["n_channels"].iloc[0])
-        n_samples = int(summary["n_samples"].iloc[0])
-
-        rows.append(
+    if len(eeg_channels) == 0:
+        raw.set_channel_types(
             {
-                "condition": condition,
-                "subjects": int(len(summary)),
-                "total_epochs": total_epochs,
-                "shape": (total_epochs, n_channels, n_samples),
+                channel: "eeg"
+                for channel in raw.ch_names
             }
         )
+        eeg_channels = raw.ch_names.copy()
 
-    return pd.DataFrame(rows)
+    raw.pick(eeg_channels)
+
+    return raw
 
 
-def summarize_kfold_partitions(
-    dataset,
-    k: int = 10,
-    inner_splits: int = 5,
-    random_state: int = 3407,
-) -> pd.DataFrame:
-    subject_ids = dataset.get_subject_ids()
-    labels = dataset.get_labels()
-    summary = dataset.get_summary_dataframe()
+def replace_non_finite_raw_values(raw):
+    data = raw.get_data()
 
-    label_by_subject = {
-        row["subject_id"]: row["label_code"]
-        for _, row in summary.iterrows()
-    }
+    if not np.isfinite(data).all():
+        raw._data = np.nan_to_num(
+            data,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
 
-    epochs_by_subject = {
-        row["subject_id"]: {
-            "complete": int(row["complete_n_epochs"]),
-            "open": int(row["open_n_epochs"]),
-            "closed": int(row["closed_n_epochs"]),
-        }
-        for _, row in summary.iterrows()
-    }
+    return raw
 
-    n_channels = int(summary["n_channels"].iloc[0])
-    n_samples = int(summary["n_samples"].iloc[0])
 
-    outer_gkf = StratifiedGroupKFold(
-        n_splits=k,
-        shuffle=True,
-        random_state=random_state,
+def build_epoch_metadata(
+    eeg_data: np.ndarray,
+    epochs,
+    raw,
+    original_sfreq: float,
+    original_duration_sec: float,
+    window: float,
+    overlap: float,
+    eyes_split_sec: float,
+) -> dict:
+    sfreq = float(raw.info["sfreq"])
+    duration_sec = raw.n_times / sfreq
+
+    epoch_start_sec = (
+        epochs.events[:, 0].astype(float) - float(raw.first_samp)
+    ) / sfreq
+
+    epoch_start_sec = np.maximum(epoch_start_sec, 0.0)
+    epoch_end_sec = epoch_start_sec + window
+
+    condition_labels = assign_epoch_conditions(
+        epoch_start_sec=epoch_start_sec,
+        epoch_end_sec=epoch_end_sec,
+        eyes_split_sec=eyes_split_sec,
     )
 
-    rows = []
+    masks = build_condition_masks(condition_labels)
 
-    for fold_idx, (trainval_idx, test_idx) in enumerate(
-        outer_gkf.split(np.zeros(len(labels)), labels, groups=subject_ids),
-        start=1,
-    ):
-        trainval_idx = np.asarray(trainval_idx)
-        test_idx = np.asarray(test_idx)
-
-        inner_gkf = StratifiedGroupKFold(
-            n_splits=inner_splits,
-            shuffle=True,
-            random_state=random_state,
-        )
-
-        train_idx, val_idx = next(
-            inner_gkf.split(
-                np.zeros(len(trainval_idx)),
-                [labels[i] for i in trainval_idx],
-                groups=[subject_ids[i] for i in trainval_idx],
-            )
-        )
-
-        split_indices = {
-            "train": trainval_idx[train_idx],
-            "val": trainval_idx[val_idx],
-            "test": test_idx,
-        }
-
-        for split_name, indices in split_indices.items():
-            split_subjects = [subject_ids[i] for i in indices]
-            split_labels = [label_by_subject[subject] for subject in split_subjects]
-
-            complete_epochs = sum(
-                epochs_by_subject[subject]["complete"]
-                for subject in split_subjects
-            )
-
-            open_epochs = sum(
-                epochs_by_subject[subject]["open"]
-                for subject in split_subjects
-            )
-
-            closed_epochs = sum(
-                epochs_by_subject[subject]["closed"]
-                for subject in split_subjects
-            )
-
-            rows.append(
-                {
-                    "fold": fold_idx,
-                    "split": split_name,
-                    "n_subjects": len(split_subjects),
-                    "subjects": ", ".join(f"ID{subject}" for subject in split_subjects),
-                    "label_counts": dict(Counter(split_labels)),
-                    "complete_shape": (complete_epochs, n_channels, n_samples),
-                    "open_shape": (open_epochs, n_channels, n_samples),
-                    "closed_shape": (closed_epochs, n_channels, n_samples),
-                }
-            )
-
-    return pd.DataFrame(rows)
+    return {
+        "original_sfreq": original_sfreq,
+        "sfreq": sfreq,
+        "original_duration_sec": original_duration_sec,
+        "duration_sec": duration_sec,
+        "n_channels": int(eeg_data.shape[1]),
+        "n_samples": int(eeg_data.shape[2]),
+        "complete_n_epochs": int(np.sum(masks["complete"])),
+        "open_n_epochs": int(np.sum(masks["open"])),
+        "closed_n_epochs": int(np.sum(masks["closed"])),
+        "transition_n_epochs": int(np.sum(masks["transition"])),
+        "complete_shape": tuple(eeg_data[masks["complete"]].shape),
+        "open_shape": tuple(eeg_data[masks["open"]].shape),
+        "closed_shape": tuple(eeg_data[masks["closed"]].shape),
+        "condition_masks": {
+            "complete": masks["complete"],
+            "open": masks["open"],
+            "closed": masks["closed"],
+        },
+    }
