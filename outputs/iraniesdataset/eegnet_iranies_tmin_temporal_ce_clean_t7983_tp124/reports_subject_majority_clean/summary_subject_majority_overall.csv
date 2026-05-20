@@ -1,2 +1,0 @@
-config,n_runs,total_test_subject_predictions,mean_majority_acc,std_majority_acc,mean_majority_balanced_acc,std_majority_balanced_acc,mean_majority_macro_f1,std_majority_macro_f1,mean_temporal_acc,std_temporal_acc,decision_rule,aggregation,mask_used
-eegnet_iranies_tmin_temporal_ce_clean_t7983_tp124,5,121,0.496,0.008944271909999168,0.5,0.0,0.33153153153153153,0.004028951310810416,0.4974596774193548,0.0050422039499518735,majority_vote_over_argmax_A_s,none,False

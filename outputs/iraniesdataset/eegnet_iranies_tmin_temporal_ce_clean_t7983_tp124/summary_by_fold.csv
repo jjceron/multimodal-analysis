@@ -1,2 +1,0 @@
-split_seed,init_seed,fold,n_runs,mean_test_bacc,mean_test_acc,mean_test_macro_f1,mean_test_temporal_acc
-3407,2025,1,1,0.5833333333333334,0.5833333333333334,0.5555555555555556,0.6031586021505376
