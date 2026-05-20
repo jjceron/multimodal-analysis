@@ -1,10 +1,12 @@
 from __future__ import annotations
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 
 from src.models.eegnet import EEGNet
-from src.data.build_dataset import EEGDataset, create_kfold_dataloaders
+from src.data.build_iranies import EEGDataset_ADHD, create_kfold_dataloaders_
+
 
 def expected_t_prime(T: int, pool1: int, pool2: int) -> int:
     """
@@ -200,12 +202,19 @@ def test_eegnet_synthetic_shapes():
 def test_eegnet_with_real_dataloader():
     """
     Test de integración:
-    EEGDataset -> DataLoader -> batch["X"], batch["mask"] -> EEGNet.
+    Dataset -> DataLoader -> batch["X"], batch["mask"] -> EEGNet.
     """
 
-    dataset = EEGDataset(condition="closed")
+    project_root = Path(__file__).resolve().parents[1]
+    adhd_dir = project_root / "data" / "iraniesdataset" / "ADHD"
+    control_dir = project_root / "data" / "iraniesdataset" / "Control"
 
-    folds = create_kfold_dataloaders(
+    dataset = EEGDataset_ADHD(
+        adhd_dir=adhd_dir,
+        control_dir=control_dir,
+    )
+
+    folds = create_kfold_dataloaders_(
         dataset,
         k=5,
         batch_size=8,
@@ -223,7 +232,7 @@ def test_eegnet_with_real_dataloader():
     mask = batch["mask"]
 
     B, C, T = x.shape
-    L = 3
+    L = 2
 
     model = EEGNet(
         n_channels=C,
