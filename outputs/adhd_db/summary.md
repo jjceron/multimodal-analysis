@@ -14,98 +14,98 @@ La estandarización se aplica por sujeto y canal sobre la dimensión temporal, p
 
 ## Notación y shapes
 
-Sea \(N\) el número de sujetos, \(C\) el número de canales, \(T_s\) la longitud temporal del sujeto \(s\), \(T\) una longitud temporal común, \(T'\) la longitud temporal después de los pooling del modelo y \(L = 2\) el número de clases.
+Sea $N$ el número de sujetos, $C$ el número de canales, $T_s$ la longitud temporal del sujeto $s$, $T$ una longitud temporal común, $T'$ la longitud temporal después de los pooling del modelo y $L = 2$ el número de clases.
 
 Cada sujeto se representa como:
 
-\[
+$$
 \bf {X}_s \in \rm R^{C \times T_s},
 \qquad
 y_s \in \{0,1\}
-\]
+$$
 
-En estos experimentos, el modelo usa \(C = 24\) canales. Como `pool1 = 8` y `pool2 = 8`, la reducción temporal total es \(64\), por lo que:
+En estos experimentos, el modelo usa $C = 24$ canales. Como `pool1 = 8` y `pool2 = 8`, la reducción temporal total es $64$, por lo que:
 
-\[
+$$
 T' = \left\lfloor \frac{T}{64} \right\rfloor,
 \qquad
 T'_s = \left\lfloor \frac{T_s}{64} \right\rfloor
-\]
+$$
 
 Cuando se usa `duration_sec = 62` y `default_fs = 128`, la entrada temporal queda en:
 
-\[
+$$
 T = 62 \cdot 128 = 7936,
 \qquad
 T' = 124
-\]
+$$
 
 ## Representación `tensor`
 
 En modo `tensor`, todos los sujetos se recortan a la mínima longitud temporal disponible para poder formar un tensor único:
 
-\[
+$$
 \bf {X} \in \rm R^{N \times C \times T}
-\]
+$$
 
 Durante entrenamiento, cada batch entra como:
 
-\[
+$$
 \bf {X}_B \in \rm R^{B \times C \times T}
-\]
+$$
 
 EEGNet añade una dimensión espacial interna:
 
-\[
+$$
 \bf {X}_B \rightarrow \rm R^{B \times 1 \times C \times T}
-\]
+$$
 
 Después de las capas convolucionales y de pooling, el clasificador produce logits temporales:
 
-\[
+$$
 \bf {Z} \in \rm R^{B \times T' \times L}
-\]
+$$
 
 Si `aggregate = true`, la agregación actúa después del clasificador temporal y antes de la pérdida:
 
-\[
+$$
 \bf {z}_s =
 (1-\alpha)\frac{1}{T'}\sum_{t=1}^{T'} \bf {Z}_{s,t}
 +
 \alpha \max_{t} \bf {Z}_{s,t}
-\]
+$$
 
 Por tanto, la salida usada por `CrossEntropyLoss` es:
 
-\[
+$$
 \bf {z} \in \rm R^{B \times L},
 \qquad
 \bf {y} \in \rm R^{B}
-\]
+$$
 
 Si `aggregate = false`, no se aplica agregación dentro del modelo. La pérdida usa los logits temporales completos:
 
-\[
+$$
 \bf {Z} \in \rm R^{B \times T' \times L}
-\]
+$$
 
 En ese caso, las etiquetas originales siguen siendo por sujeto:
 
-\[
+$$
 \bf {y} \in \rm R^{B}
-\]
+$$
 
 pero para calcular la pérdida se expanden temporalmente:
 
-\[
+$$
 \tilde{\bf {y}} \in \rm R^{B \times T'}
-\]
+$$
 
 A nivel de dataset, esto equivale a:
 
-\[
+$$
 \tilde{\bf {y}} \in \rm R^{N \times T'}
-\]
+$$
 
 La predicción final por sujeto no se toma directamente de cada instante temporal, sino por voto mayoritario sobre las predicciones temporales.
 
@@ -113,99 +113,99 @@ La predicción final por sujeto no se toma directamente de cada instante tempora
 
 En modo `list`, no se fuerza una longitud común entre sujetos. La entrada del dataset se mantiene como:
 
-\[
+$$
 [\bf {X}_1,\ldots,\bf {X}_N],
 \qquad
 \bf {X}_s \in \rm R^{C \times T_s}
-\]
+$$
 
-Cada batch contiene una lista de \(B\) tensores:
+Cada batch contiene una lista de $B$ tensores:
 
-\[
+$$
 [\bf {X}_{s_1},\ldots,\bf {X}_{s_B}]
-\]
+$$
 
 Si todos los sujetos del batch tienen la misma longitud temporal, el modelo los apila temporalmente y ejecuta un forward equivalente a:
 
-\[
+$$
 \rm R^{B \times C \times T}
-\]
+$$
 
 Si las longitudes son distintas, el modelo procesa cada sujeto individualmente como:
 
-\[
+$$
 \rm R^{1 \times C \times T_s}
-\]
+$$
 
 y devuelve una lista de logits temporales:
 
-\[
+$$
 [\bf {Z}_1,\ldots,\bf {Z}_B],
 \qquad
 \bf {Z}_s \in \rm R^{T'_s \times L}
-\]
+$$
 
 Si `aggregate = true`, cada sujeto se agrega de forma independiente:
 
-\[
+$$
 \bf {z}_s \in \rm R^{L}
-\]
+$$
 
 y luego se concatena el batch:
 
-\[
+$$
 \bf {z} \in \rm R^{B \times L},
 \qquad
 \bf {y} \in \rm R^{B}
-\]
+$$
 
 Si `aggregate = false`, no existe necesariamente una matriz densa:
 
-\[
+$$
 \rm R^{B \times T' \times L}
-\]
+$$
 
-porque cada sujeto puede tener un \(T'_s\) distinto. Por eso la salida se conserva como lista:
+porque cada sujeto puede tener un $T'_s$ distinto. Por eso la salida se conserva como lista:
 
-\[
+$$
 [\bf {Z}_1,\ldots,\bf {Z}_B],
 \qquad
 \bf {Z}_s \in \rm R^{T'_s \times L}
-\]
+$$
 
 La etiqueta original sigue siendo una sola por sujeto:
 
-\[
+$$
 \bf {y} \in \rm R^{B}
-\]
+$$
 
 pero para la pérdida temporal se repite dentro de cada sujeto:
 
-\[
+$$
 \tilde{\bf {y}}_s \in \rm R^{T'_s}
-\]
+$$
 
-En este caso, no se debe describir la etiqueta expandida como una matriz única \(\rm R^{N \times T'}\), salvo que todos los sujetos tengan la misma longitud temporal.
+En este caso, no se debe describir la etiqueta expandida como una matriz única $\rm R^{N \times T'}$, salvo que todos los sujetos tengan la misma longitud temporal.
 
 ## Modelo
 
 El modelo usa una arquitectura tipo EEGNet:
 
-1. convolución temporal sobre la dimensión \(T\);
-2. convolución espacial depthwise sobre los \(C\) canales;
+1. convolución temporal sobre la dimensión $T$;
+2. convolución espacial depthwise sobre los $C$ canales;
 3. bloque separable depthwise-pointwise;
-4. clasificador convolucional \(1 \times 1\);
-5. logits temporales \(\rm R^{B \times T' \times L}\) o lista de logits \(\rm R^{T'_s \times L}\).
+4. clasificador convolucional $1 \times 1$;
+5. logits temporales $\rm R^{B \times T' \times L}$ o lista de logits $\rm R^{T'_s \times L}$.
 
 Con `norm = auto`, el modelo usa `BatchNorm2d` en modo `tensor` y `GroupNorm` en modo `list`.
 
 ## BatchNorm2d vs GroupNorm
 
-En modo `tensor`, el modelo recibe batches reales con forma \(\rm R^{B \times C \times T}\), que internamente se convierten a \(\rm R^{B \times 1 \times C \times T}\). En ese caso, `BatchNorm2d` es apropiada porque estima estadísticas usando el batch y las dimensiones espaciales/temporales.
+En modo `tensor`, el modelo recibe batches reales con forma $\rm R^{B \times C \times T}$, que internamente se convierten a $\rm R^{B \times 1 \times C \times T}$. En ese caso, `BatchNorm2d` es apropiada porque estima estadísticas usando el batch y las dimensiones espaciales/temporales.
 
-En modo `list`, los sujetos pueden tener longitudes \(T_s\) distintas. Cuando no se pueden apilar, el forward se ejecuta por sujeto con batch efectivo \(B = 1\). En ese escenario, `BatchNorm2d` deja de estimar estadísticas representativas del conjunto y puede volverse inestable.
+En modo `list`, los sujetos pueden tener longitudes $T_s$ distintas. Cuando no se pueden apilar, el forward se ejecuta por sujeto con batch efectivo $B = 1$. En ese escenario, `BatchNorm2d` deja de estimar estadísticas representativas del conjunto y puede volverse inestable.
 
-Por eso, `GroupNorm` es más adecuada para `list`: normaliza grupos de canales dentro de cada muestra y no depende del tamaño del batch. No existe una capa estándar llamada `GroupNorm2d` en PyTorch porque `nn.GroupNorm` ya opera sobre tensores convolucionales con forma \(\rm R^{N \times C \times H \times W}\).
+Por eso, `GroupNorm` es más adecuada para `list`: normaliza grupos de canales dentro de cada muestra y no depende del tamaño del batch. No existe una capa estándar llamada `GroupNorm2d` en PyTorch porque `nn.GroupNorm` ya opera sobre tensores convolucionales con forma $\rm R^{N \times C \times H \times W}$.
 
 ## Versiones evaluadas
 
