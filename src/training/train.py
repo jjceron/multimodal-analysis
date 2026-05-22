@@ -1,505 +1,448 @@
 from __future__ import annotations
 
-import argparse
 import copy
 import json
+import argparse
 import random
 from pathlib import Path
-from collections import Counter
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 
-from sklearn.metrics import (
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    recall_score,
-)
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
-from src.data.build_dataset import EEGDataset, create_kfold_dataloaders
+from src.datasets.adhd_db import EEGDataset, create_dataloaders
 from src.models.eegnet import EEGNet
+from src.utils.visualization import plot_fold_curves, plot_confusion_matrix
 
 
-MODEL_NAME = "eegnet_small_t600_meanmax050"
-
-FINAL_CONFIG = {
-    "name": MODEL_NAME,
-    "n_channels": 24,
-    "n_classes": 3,
-    "F1": 8,
-    "D": 2,
-    "F2": 16,
-    "temporal_kern": 63,
-    "separable_kern": 15,
-    "pool1": 8,
-    "pool2": 8,
-    "dropout": 0.5,
-    "meanmax_alpha": 0.5,
-    "lr": 1e-4,
-    "weight_decay": 1e-4,
-}
-
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+OUTPUT_ROOT = PROJECT_ROOT / "outputs"
 
 DEFAULT_SPLIT_SEEDS = [3407]
-DEFAULT_INIT_SEEDS = [2025]
-RANDOM_SEED_COUNT = 10
+DEFAULT_INIT_SEEDS = [3001]
+RANDOM_SEED_COUNT = 3
 RANDOM_SEED_MAX = 10000
 
 
-def set_seed(seed: int):
+def parse_optional_float(value: str) -> float | None:
+    if value.lower() in {"none", "null", "nan"}:
+        return None
+    return float(value)
+
+
+def parse_bool(value: str) -> bool:
+    value = value.lower()
+
+    if value in {"true", "1", "yes"}:
+        return True
+
+    if value in {"false", "0", "no"}:
+        return False
+
+    raise argparse.ArgumentTypeError("Expected true/false.")
+
+
+def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
-
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
+    # torch.backends.cudnn.deterministic = True
+    # torch.use_deterministic_algorithms(True)
 
 
-def generate_random_seeds(
-    count: int = RANDOM_SEED_COUNT,
-    max_value: int = RANDOM_SEED_MAX,
-):
-    if count < 1:
-        raise ValueError("count must be >= 1")
-
-    return random.sample(range(0, max_value + 1), k=count)
+def sample_random_seeds(n: int, seed_max: int) -> list[int]:
+    return random.sample(range(seed_max), k=n)
 
 
-def to_int(value):
-    if hasattr(value, "item"):
-        return int(value.item())
+def resolve_save_dir(save_dir: str) -> Path:
+    save_dir = Path(save_dir)
 
-    return int(value)
+    if save_dir.is_absolute():
+        return save_dir
 
-
-def label_to_int(value):
-    if hasattr(value, "item"):
-        return int(value.item())
-
-    return int(value)
+    return OUTPUT_ROOT / save_dir
 
 
-def standardize_eeg(
-    x: torch.Tensor,
-    mask: torch.Tensor | None = None,
-    eps: float = 1e-6,
-):
+def save_config(args, save_dir: Path) -> None:
+    config = vars(args).copy()
+
+    config["save_dir"] = str(save_dir)
+    config["project_root"] = str(PROJECT_ROOT)
+
+    config_path = save_dir / "config.json"
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4, sort_keys=True)
+
+
+def to_device(X, y, device):
+    y = y.to(device)
+
+    if isinstance(X, torch.Tensor):
+        X = X.to(device)
+    else:
+        X = [x.to(device) for x in X]
+
+    return X, y
+
+
+def standardize_eeg(X, eps: float = 1e-6):
     """
-    Estandarización por sujeto y canal.
+    Subject-wise, channel-wise standardization.
 
-    x:
-        (B, C, T)
+    Tensor mode:
+        X: Tensor[B, C, T]
+        mean/std over T for each subject and channel.
 
-    mask:
-        (B, T)
+    List mode:
+        X: list[Tensor[C, T_i]]
+        mean/std over T_i for each subject and channel.
 
-    return:
-        (B, C, T)
+    This does not use train/val/test population statistics, so it does not leak
+    information across splits.
     """
+    if isinstance(X, torch.Tensor):
+        mean = X.mean(dim=-1, keepdim=True)
+        std = X.std(dim=-1, keepdim=True, unbiased=False).clamp_min(eps)
+        return (X - mean) / std
 
-    if mask is None:
-        mean = x.mean(dim=-1, keepdim=True)
-        std = x.std(dim=-1, keepdim=True, unbiased=False).clamp_min(eps)
-
-        return (x - mean) / std
-
-    mask = mask.bool()
-    mask_f = mask.float().unsqueeze(1)
-    denom = mask_f.sum(dim=-1, keepdim=True).clamp_min(1.0)
-
-    mean = (x * mask_f).sum(dim=-1, keepdim=True) / denom
-
-    var = (((x - mean) * mask_f) ** 2).sum(dim=-1, keepdim=True) / denom
-    std = torch.sqrt(var + eps)
-
-    x_norm = (x - mean) / std
-    x_norm = x_norm.masked_fill(~mask.unsqueeze(1), 0.0)
-
-    return x_norm
+    return [standardize_eeg(x, eps=eps) for x in X]
 
 
-def get_split_subjects_and_labels(dataset: EEGDataset, loader):
-    indices = loader.dataset.indices
-
-    subjects = [
-        int(dataset.samples[i]["subject_id"])
-        for i in indices
-    ]
-
-    labels = [
-        label_to_int(dataset.samples[i]["label"])
-        for i in indices
-    ]
-
-    return subjects, labels
-
-
-def get_class_weights(
-    dataset: EEGDataset,
-    train_loader,
-    n_classes: int,
-    device: torch.device,
-):
-    train_indices = train_loader.dataset.indices
-
-    train_labels = [
-        label_to_int(dataset.samples[i]["label"])
-        for i in train_indices
-    ]
-
-    counts = Counter(train_labels)
-    total = sum(counts.values())
-
-    weights = []
-
-    for class_idx in range(n_classes):
-        class_count = counts.get(class_idx, 0)
-
-        if class_count == 0:
-            weights.append(0.0)
-        else:
-            weights.append(total / (n_classes * class_count))
+def get_class_weights(labels: list[int], n_classes: int, device) -> torch.Tensor:
+    counts = np.bincount(np.asarray(labels), minlength=n_classes)
+    weights = counts.sum() / np.clip(counts, a_min=1, a_max=None)
+    weights = weights / weights.mean()
 
     return torch.tensor(weights, dtype=torch.float32, device=device)
 
 
-def compute_metrics(
-    targets,
-    preds,
-    n_classes: int,
-    total_loss: float | None = None,
-):
-    labels = list(range(n_classes))
-    n = max(len(targets), 1)
+# def temporal_cross_entropy(logits, y, criterion):
+#     """
+#     aggregate=False.
 
-    metrics = {
-        "acc": accuracy_score(targets, preds),
-        "balanced_acc": recall_score(
-            targets,
-            preds,
-            labels=labels,
-            average="macro",
-            zero_division=0,
-        ),
-        "macro_f1": f1_score(
-            targets,
-            preds,
-            labels=labels,
-            average="macro",
-            zero_division=0,
-        ),
-        "confusion_matrix": confusion_matrix(
-            targets,
-            preds,
-            labels=labels,
-        ).tolist(),
-        "target_counts": dict(Counter(int(v) for v in targets)),
-        "pred_counts": dict(Counter(int(v) for v in preds)),
+#     Tensor mode:
+#         logits: Tensor[B, T', L]
+#         y:      Tensor[B]
+
+#     List mode:
+#         logits: list[Tensor[T'_i, L]]
+#         y:      Tensor[B]
+#     """
+#     if isinstance(logits, torch.Tensor):
+#         B, T, L = logits.shape
+#         y_time = y.unsqueeze(1).expand(B, T)
+
+#         return criterion(
+#             logits.reshape(B * T, L),
+#             y_time.reshape(B * T),
+#         )
+
+#     logits_all = []
+#     y_all = []
+
+#     for logits_i, y_i in zip(logits, y):
+#         logits_all.append(logits_i)
+#         y_all.append(y_i.repeat(logits_i.shape[0]))
+
+#     return criterion(
+#         torch.cat(logits_all, dim=0),
+#         torch.cat(y_all, dim=0),
+#     )
+
+def temporal_cross_entropy(logits, y, criterion):
+    """
+    aggregate=False.
+
+    Tensor mode:
+        logits: Tensor[B, T', L]
+        y:      Tensor[B]
+
+    List mode:
+        logits: list[Tensor[T'_i, L]]
+        y:      Tensor[B]
+    """
+    if isinstance(logits, torch.Tensor):
+        B, T, L = logits.shape
+        y_time = y.unsqueeze(1).expand(B, T)
+
+        return criterion(
+            logits.reshape(B * T, L),
+            y_time.reshape(B * T),
+        )
+
+    weight = getattr(criterion, "weight", None)
+
+    losses = []
+
+    for logits_i, y_i in zip(logits, y):
+        y_time_i = y_i.repeat(logits_i.shape[0])
+
+        loss_i = torch.nn.functional.cross_entropy(
+            logits_i,
+            y_time_i,
+            reduction="mean",
+            weight=None,
+        )
+
+        losses.append(loss_i)
+
+    losses = torch.stack(losses)
+
+    if weight is None:
+        return losses.mean()
+
+    subject_weights = weight[y]
+
+    return (losses * subject_weights).sum() / subject_weights.sum().clamp_min(1e-8)
+
+
+def compute_loss(logits, y, aggregate: bool, criterion):
+    """
+    CrossEntropyLoss receives raw logits.
+
+    aggregate=True:
+        logits: Tensor[B, L]
+        y:      Tensor[B]
+
+    aggregate=False:
+        logits: Tensor[B, T', L] or list[Tensor[T'_i, L]]
+        y:      Tensor[B]
+    """
+    if aggregate:
+        return criterion(logits, y)
+
+    return temporal_cross_entropy(logits, y, criterion)
+
+
+@torch.no_grad()
+def majority_vote_from_temporal_logits(
+    logits_i: torch.Tensor,
+    n_classes: int,
+) -> torch.Tensor:
+    """
+    logits_i: Tensor[T', L]
+
+    Rule:
+        1. argmax over classes for each t'
+        2. majority vote over time
+        3. tie -> highest mean softmax probability among tied classes
+        4. tie persists -> smallest class index
+    """
+    pred_time = logits_i.argmax(dim=-1)
+    counts = torch.bincount(pred_time, minlength=n_classes).float()
+
+    max_count = counts.max()
+    tied = torch.where(counts == max_count)[0]
+
+    if tied.numel() > 1:
+        probs = torch.softmax(logits_i, dim=-1)
+        mean_probs = probs.mean(dim=0)
+
+        tied_probs = mean_probs[tied]
+        tied = tied[torch.where(tied_probs == tied_probs.max())[0]]
+
+    return tied.min().long()
+
+
+def predict_from_logits(logits, aggregate: bool, n_classes: int) -> torch.Tensor:
+    if aggregate:
+        return logits.argmax(dim=-1)
+
+    if isinstance(logits, torch.Tensor):
+        return torch.stack(
+            [
+                majority_vote_from_temporal_logits(
+                    logits_i=logits_i,
+                    n_classes=n_classes,
+                )
+                for logits_i in logits
+            ]
+        )
+
+    return torch.stack(
+        [
+            majority_vote_from_temporal_logits(
+                logits_i=logits_i,
+                n_classes=n_classes,
+            )
+            for logits_i in logits
+        ]
+    )
+
+
+def compute_metrics(y_true: list[int], y_pred: list[int]) -> dict[str, float]:
+    return {
+        "acc": accuracy_score(y_true, y_pred),
+        "balanced_acc": balanced_accuracy_score(y_true, y_pred),
+        "f1_macro": f1_score(y_true, y_pred, average="macro"),
     }
-
-    if total_loss is not None:
-        metrics["loss"] = total_loss / n
-
-    return metrics
-
-
-def compute_majority_baseline(
-    train_labels,
-    test_labels,
-    n_classes: int,
-):
-    counts = Counter(int(v) for v in train_labels)
-
-    majority_class = sorted(
-        counts.items(),
-        key=lambda item: (-item[1], item[0]),
-    )[0][0]
-
-    preds = [majority_class for _ in test_labels]
-
-    metrics = compute_metrics(
-        targets=test_labels,
-        preds=preds,
-        n_classes=n_classes,
-        total_loss=None,
-    )
-
-    metrics["majority_class"] = majority_class
-
-    return metrics
-
-
-def print_metrics(split_name: str, metrics: dict):
-    loss_text = ""
-
-    if "loss" in metrics:
-        loss_text = f"loss={metrics['loss']:.4f} | "
-
-    print(
-        f"{split_name:>8} | "
-        f"{loss_text}"
-        f"acc={metrics['acc']:.4f} | "
-        f"bacc={metrics['balanced_acc']:.4f} | "
-        f"macro_f1={metrics['macro_f1']:.4f} | "
-        f"pred_counts={metrics['pred_counts']}"
-    )
-
-
-def build_model(
-    args,
-    n_classes: int,
-    device: torch.device,
-):
-    model = EEGNet(
-        n_channels=args.n_channels,
-        n_classes=n_classes,
-        F1=FINAL_CONFIG["F1"],
-        D=FINAL_CONFIG["D"],
-        F2=FINAL_CONFIG["F2"],
-        temporal_kern=FINAL_CONFIG["temporal_kern"],
-        separable_kern=FINAL_CONFIG["separable_kern"],
-        pool1=FINAL_CONFIG["pool1"],
-        pool2=FINAL_CONFIG["pool2"],
-        dropout=args.dropout,
-        meanmax_alpha=args.meanmax_alpha,
-    )
-
-    return model.to(device)
 
 
 def train_one_epoch(
-    model: nn.Module,
+    model,
     loader,
     criterion,
     optimizer,
-    device: torch.device,
+    device,
+    aggregate: bool,
     n_classes: int,
-    standardize: bool,
     grad_clip: float | None,
+    standardize: bool,
 ):
     model.train()
 
     total_loss = 0.0
-    all_targets = []
-    all_preds = []
+    total_n = 0
 
-    for batch in loader:
-        x = batch["X"].to(device)
-        y = batch["y"].to(device)
-        mask = batch["mask"].to(device).bool()
+    y_true_all = []
+    y_pred_all = []
+
+    for _, X, y in loader:
+        X, y = to_device(X, y, device)
 
         if standardize:
-            x = standardize_eeg(x, mask=mask)
-
-        logits_subject, _ = model(x, mask=mask)
-
-        loss = criterion(logits_subject, y)
+            X = standardize_eeg(X)
 
         optimizer.zero_grad(set_to_none=True)
+
+        logits, _ = model(X)
+        loss = compute_loss(
+            logits=logits,
+            y=y,
+            aggregate=aggregate,
+            criterion=criterion,
+        )
+
         loss.backward()
 
         if grad_clip is not None:
-            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
         optimizer.step()
 
-        batch_size = y.shape[0]
-        total_loss += loss.item() * batch_size
+        with torch.no_grad():
+            pred = predict_from_logits(
+                logits=logits,
+                aggregate=aggregate,
+                n_classes=n_classes,
+            )
 
-        preds = logits_subject.argmax(dim=1)
+        batch_n = y.shape[0]
+        total_loss += loss.item() * batch_n
+        total_n += batch_n
 
-        all_targets.extend(y.detach().cpu().tolist())
-        all_preds.extend(preds.detach().cpu().tolist())
+        y_true_all.extend(y.detach().cpu().tolist())
+        y_pred_all.extend(pred.detach().cpu().tolist())
 
-    return compute_metrics(
-        targets=all_targets,
-        preds=all_preds,
-        n_classes=n_classes,
-        total_loss=total_loss,
-    )
+    metrics = compute_metrics(y_true_all, y_pred_all)
+    metrics["loss"] = total_loss / total_n
+
+    return metrics
 
 
 @torch.no_grad()
 def evaluate(
-    model: nn.Module,
+    model,
     loader,
     criterion,
-    device: torch.device,
+    device,
+    aggregate: bool,
     n_classes: int,
     standardize: bool,
-    collect_predictions: bool = False,
-    split_name: str | None = None,
-    split_seed: int | None = None,
-    init_seed: int | None = None,
-    fold_id: int | None = None,
+    return_predictions: bool = False,
 ):
     model.eval()
 
     total_loss = 0.0
-    all_targets = []
-    all_preds = []
-    prediction_rows = []
+    total_n = 0
 
-    for batch in loader:
-        x = batch["X"].to(device)
-        y = batch["y"].to(device)
-        mask = batch["mask"].to(device).bool()
+    names_all = []
+    y_true_all = []
+    y_pred_all = []
+
+    for names, X, y in loader:
+        X, y = to_device(X, y, device)
 
         if standardize:
-            x = standardize_eeg(x, mask=mask)
+            X = standardize_eeg(X)
 
-        logits_subject, logits_time = model(x, mask=mask)
+        logits, _ = model(X)
+        loss = compute_loss(
+            logits=logits,
+            y=y,
+            aggregate=aggregate,
+            criterion=criterion,
+        )
 
-        loss = criterion(logits_subject, y)
+        pred = predict_from_logits(
+            logits=logits,
+            aggregate=aggregate,
+            n_classes=n_classes,
+        )
 
-        probs = torch.softmax(logits_subject, dim=1)
-        confidence = probs.max(dim=1).values
-        preds = logits_subject.argmax(dim=1)
+        batch_n = y.shape[0]
+        total_loss += loss.item() * batch_n
+        total_n += batch_n
 
-        batch_size = y.shape[0]
-        total_loss += loss.item() * batch_size
+        names_all.extend(list(names))
+        y_true_all.extend(y.detach().cpu().tolist())
+        y_pred_all.extend(pred.detach().cpu().tolist())
 
-        y_cpu = y.detach().cpu().tolist()
-        pred_cpu = preds.detach().cpu().tolist()
-        probs_cpu = probs.detach().cpu().numpy()
-        confidence_cpu = confidence.detach().cpu().tolist()
+    metrics = compute_metrics(y_true_all, y_pred_all)
+    metrics["loss"] = total_loss / total_n
 
-        all_targets.extend(y_cpu)
-        all_preds.extend(pred_cpu)
+    if return_predictions:
+        return metrics, names_all, y_true_all, y_pred_all
 
-        if collect_predictions:
-            subject_ids = batch["subject_id"]
-
-            for i, subject_id in enumerate(subject_ids):
-                row = {
-                    "config": MODEL_NAME,
-                    "split_seed": split_seed,
-                    "init_seed": init_seed,
-                    "fold": fold_id,
-                    "split": split_name,
-                    "subject_id": to_int(subject_id),
-                    "y_true": int(y_cpu[i]),
-                    "y_pred": int(pred_cpu[i]),
-                    "correct": int(y_cpu[i] == pred_cpu[i]),
-                    "confidence": float(confidence_cpu[i]),
-                    "length": to_int(batch["lengths"][i]),
-                }
-
-                for class_idx in range(n_classes):
-                    row[f"prob_{class_idx}"] = float(probs_cpu[i, class_idx])
-
-                prediction_rows.append(row)
-
-    metrics = compute_metrics(
-        targets=all_targets,
-        preds=all_preds,
-        n_classes=n_classes,
-        total_loss=total_loss,
-    )
-
-    return metrics, prediction_rows
+    return metrics
 
 
-def inspect_first_batch(
-    model: nn.Module,
-    loader,
-    device: torch.device,
-    standardize: bool,
-):
-    batch = next(iter(loader))
-
-    x = batch["X"].to(device)
-    mask = batch["mask"].to(device).bool()
-
-    if standardize:
-        x = standardize_eeg(x, mask=mask)
-
-    model.eval()
-
-    with torch.no_grad():
-        logits_subject, logits_time = model(x, mask=mask)
-
-    print("\nShape sanity check")
-    print(f"  input X:        {tuple(x.shape)}")
-    print(f"  mask:           {tuple(mask.shape)}")
-    print(f"  logits_time:    {tuple(logits_time.shape)}")
-    print(f"  logits_subject: {tuple(logits_subject.shape)}")
-    print(f"  subject ids:    {batch['subject_id']}")
-    print(f"  lengths:        {batch['lengths'].tolist()}")
-
-
-def run_one_training(
-    dataset: EEGDataset,
+def train_one_fold(
+    args,
     train_loader,
     val_loader,
     test_loader,
-    args,
-    device: torch.device,
-    n_classes: int,
     split_seed: int,
     init_seed: int,
-    fold_idx: int,
+    fold_id: int,
+    n_channels: int,
+    n_classes: int,
+    device,
+    save_dir: Path,
 ):
     set_seed(init_seed)
 
-    fold_id = fold_idx + 1
-
-    run_name = (
-        f"{MODEL_NAME}"
-        f"_splitseed_{split_seed}"
-        f"_initseed_{init_seed}"
-        f"_fold_{fold_id}"
-    )
-
-    print("\n" + "=" * 100)
-    print(f"Run: {run_name}")
-    print("=" * 100)
-
-    train_subjects, train_labels = get_split_subjects_and_labels(
-        dataset,
-        train_loader,
-    )
-
-    val_subjects, val_labels = get_split_subjects_and_labels(
-        dataset,
-        val_loader,
-    )
-
-    test_subjects, test_labels = get_split_subjects_and_labels(
-        dataset,
-        test_loader,
-    )
-
-    print("\nSplit information")
-    print(f"  split_seed:       {split_seed}")
-    print(f"  init_seed:        {init_seed}")
-    print(f"  fold:             {fold_id}")
-    print(f"  train subjects:   {len(train_subjects)} | labels: {dict(Counter(train_labels))}")
-    print(f"  val subjects:     {len(val_subjects)} | labels: {dict(Counter(val_labels))}")
-    print(f"  test subjects:    {len(test_subjects)} | labels: {dict(Counter(test_labels))}")
-    print(f"  train batches:    {len(train_loader)}")
-    print(f"  val batches:      {len(val_loader)}")
-    print(f"  test batches:     {len(test_loader)}")
-
-    standardize = not args.no_standardize
-
-    model = build_model(
-        args=args,
+    model = EEGNet(
+        n_channels=n_channels,
         n_classes=n_classes,
-        device=device,
-    )
+        F1=args.F1,
+        D=args.D,
+        F2=args.F2,
+        temporal_kern=args.temporal_kern,
+        separable_kern=args.separable_kern,
+        pool1=args.pool1,
+        pool2=args.pool2,
+        dropout=args.dropout,
+        meanmax_alpha=args.meanmax_alpha,
+        pp_as=args.pp_as,
+        aggregate=args.aggregate,
+        norm=args.norm,
+    ).to(device)
 
-    if args.no_class_weights:
-        class_weights = None
-    else:
+    class_weights = None
+
+    if not args.no_class_weights:
+        train_labels = train_loader.dataset.y.detach().cpu().tolist()
         class_weights = get_class_weights(
-            dataset=dataset,
-            train_loader=train_loader,
+            labels=train_labels,
             n_classes=n_classes,
             device=device,
         )
@@ -512,66 +455,15 @@ def run_one_training(
         weight_decay=args.weight_decay,
     )
 
-    majority_metrics = compute_majority_baseline(
-        train_labels=train_labels,
-        test_labels=test_labels,
-        n_classes=n_classes,
-    )
+    history = defaultdict(list)
 
-    chance_bacc = 1.0 / n_classes
-
-    print("\nFinal baseline configuration")
-    print(f"  model:            {MODEL_NAME}")
-    print(f"  X_s:              R^{{{args.n_channels} x T_s}}")
-    print(f"  F1:               {FINAL_CONFIG['F1']}")
-    print(f"  D:                {FINAL_CONFIG['D']}")
-    print(f"  F2:               {FINAL_CONFIG['F2']}")
-    print(f"  temporal_kern:  {FINAL_CONFIG['temporal_kern']}")
-    print(f"  separable_kern: {FINAL_CONFIG['separable_kern']}")
-    print(f"  pool1:            {FINAL_CONFIG['pool1']}")
-    print(f"  pool2:            {FINAL_CONFIG['pool2']}")
-    print(f"  total_pool:       {FINAL_CONFIG['pool1'] * FINAL_CONFIG['pool2']}")
-    print(f"  expected T':      approx 38400 / {FINAL_CONFIG['pool1'] * FINAL_CONFIG['pool2']} = 600")
-    print(f"  aggregation:      meanmax")
-    print(f"  meanmax_alpha:    {args.meanmax_alpha}")
-
-    print("\nTraining configuration")
-    print(f"  epochs:           {args.epochs}")
-    print(f"  patience:         {args.patience}")
-    print(f"  lr:               {args.lr}")
-    print(f"  weight_decay:     {args.weight_decay}")
-    print(f"  dropout:          {args.dropout}")
-    print(f"  standardize:      {standardize}")
-    print(f"  grad_clip:        {args.grad_clip}")
-    print(
-        f"  class_weights:    "
-        f"{None if class_weights is None else class_weights.detach().cpu().tolist()}"
-    )
-
-    print("\nReference baselines on this test split")
-    print(f"  chance bacc:      {chance_bacc:.4f}")
-    print(
-        f"  majority class:   {majority_metrics['majority_class']} | "
-        f"acc={majority_metrics['acc']:.4f} | "
-        f"bacc={majority_metrics['balanced_acc']:.4f} | "
-        f"macro_f1={majority_metrics['macro_f1']:.4f}"
-    )
-
-    if args.inspect_shapes:
-        inspect_first_batch(
-            model=model,
-            loader=train_loader,
-            device=device,
-            standardize=standardize,
-        )
-
-    best_state_dict = None
-    best_epoch = 0
-    best_val_bacc = -1.0
+    best_val_balanced_acc = -1.0
     best_val_loss = float("inf")
+    best_epoch = 0
+    best_state = None
     patience_counter = 0
 
-    history_rows = []
+    standardize = not args.no_standardize
 
     for epoch in range(1, args.epochs + 1):
         train_metrics = train_one_epoch(
@@ -580,550 +472,428 @@ def run_one_training(
             criterion=criterion,
             optimizer=optimizer,
             device=device,
+            aggregate=args.aggregate,
             n_classes=n_classes,
-            standardize=standardize,
             grad_clip=args.grad_clip,
+            standardize=standardize,
         )
 
-        val_metrics, _ = evaluate(
+        val_metrics = evaluate(
             model=model,
             loader=val_loader,
             criterion=criterion,
             device=device,
+            aggregate=args.aggregate,
             n_classes=n_classes,
             standardize=standardize,
         )
 
-        history_rows.append(
-            {
-                "config": MODEL_NAME,
-                "split_seed": split_seed,
-                "init_seed": init_seed,
-                "fold": fold_id,
-                "epoch": epoch,
-                "train_loss": train_metrics["loss"],
-                "train_acc": train_metrics["acc"],
-                "train_balanced_acc": train_metrics["balanced_acc"],
-                "train_macro_f1": train_metrics["macro_f1"],
-                "train_pred_counts": json.dumps(train_metrics["pred_counts"]),
-                "val_loss": val_metrics["loss"],
-                "val_acc": val_metrics["acc"],
-                "val_balanced_acc": val_metrics["balanced_acc"],
-                "val_macro_f1": val_metrics["macro_f1"],
-                "val_pred_counts": json.dumps(val_metrics["pred_counts"]),
-            }
-        )
+        history["train_loss"].append(train_metrics["loss"])
+        history["val_loss"].append(val_metrics["loss"])
+        history["train_acc"].append(train_metrics["acc"])
+        history["val_acc"].append(val_metrics["acc"])
 
-        print(f"\nEpoch {epoch:03d}/{args.epochs}")
-        print_metrics("train", train_metrics)
-        print_metrics("val", val_metrics)
+        if epoch == 1 or epoch % args.print_every == 0:
+            print(
+                f"    epoch={epoch:03d} | "
+                f"train_loss={train_metrics['loss']:.4f} | "
+                f"val_loss={val_metrics['loss']:.4f} | "
+                f"val_acc={val_metrics['acc']:.4f} | "
+                f"val_bacc={val_metrics['balanced_acc']:.4f}"
+            )
 
         improved = (
-            val_metrics["balanced_acc"] > best_val_bacc
+            val_metrics["balanced_acc"] > best_val_balanced_acc
             or (
-                val_metrics["balanced_acc"] == best_val_bacc
+                val_metrics["balanced_acc"] == best_val_balanced_acc
                 and val_metrics["loss"] < best_val_loss
             )
         )
 
         if improved:
-            best_val_bacc = val_metrics["balanced_acc"]
+            best_val_balanced_acc = val_metrics["balanced_acc"]
             best_val_loss = val_metrics["loss"]
             best_epoch = epoch
-
-            best_state_dict = {
-                key: value.detach().cpu().clone()
-                for key, value in model.state_dict().items()
-            }
-
+            best_state = copy.deepcopy(model.state_dict())
             patience_counter = 0
-
-            print(
-                f"  new best | "
-                f"epoch={best_epoch} | "
-                f"val_bacc={best_val_bacc:.4f} | "
-                f"val_loss={best_val_loss:.4f}"
-            )
         else:
             patience_counter += 1
 
-        if args.patience is not None and patience_counter >= args.patience:
-            print(f"\nEarly stopping at epoch {epoch}.")
+        if patience_counter >= args.patience:
             break
 
-    if best_state_dict is None:
-        raise RuntimeError("No best model state was stored.")
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
-    model.load_state_dict(best_state_dict)
-
-    train_best_metrics, train_pred_rows = evaluate(
-        model=model,
-        loader=train_loader,
-        criterion=criterion,
-        device=device,
-        n_classes=n_classes,
-        standardize=standardize,
-        collect_predictions=True,
-        split_name="train",
-        split_seed=split_seed,
-        init_seed=init_seed,
-        fold_id=fold_id,
+    checkpoint_path = (
+        save_dir
+        / "checkpoints"
+        / f"split-{split_seed}_init-{init_seed}_fold-{fold_id:02d}.pt"
     )
 
-    val_best_metrics, val_pred_rows = evaluate(
-        model=model,
-        loader=val_loader,
-        criterion=criterion,
-        device=device,
-        n_classes=n_classes,
-        standardize=standardize,
-        collect_predictions=True,
-        split_name="val",
-        split_seed=split_seed,
-        init_seed=init_seed,
-        fold_id=fold_id,
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    torch.save(
+        {
+            "model_state_dict": best_state,
+            "pp_as": args.pp_as,
+            "aggregate": args.aggregate,
+            "standardize": not args.no_standardize,
+            "class_weights": not args.no_class_weights,
+            "split_seed": split_seed,
+            "init_seed": init_seed,
+            "fold": fold_id,
+            "best_epoch": best_epoch,
+            "best_val_balanced_acc": best_val_balanced_acc,
+            "best_val_loss": best_val_loss,
+            "n_channels": n_channels,
+            "n_classes": n_classes,
+            "model_params": {
+                "F1": args.F1,
+                "D": args.D,
+                "F2": args.F2,
+                "temporal_kern": args.temporal_kern,
+                "separable_kern": args.separable_kern,
+                "pool1": args.pool1,
+                "pool2": args.pool2,
+                "dropout": args.dropout,
+                "meanmax_alpha": args.meanmax_alpha,
+                "norm": args.norm,
+            },
+            "training_args": vars(args),
+        },
+        checkpoint_path,
     )
 
-    test_metrics, test_pred_rows = evaluate(
+    test_metrics, names, y_true, y_pred = evaluate(
         model=model,
         loader=test_loader,
         criterion=criterion,
         device=device,
+        aggregate=args.aggregate,
         n_classes=n_classes,
         standardize=standardize,
-        collect_predictions=True,
-        split_name="test",
-        split_seed=split_seed,
-        init_seed=init_seed,
-        fold_id=fold_id,
+        return_predictions=True,
     )
 
-    print("\nBest model evaluation")
-    print(f"  best epoch: {best_epoch}")
-    print_metrics("train", train_best_metrics)
-    print_metrics("val", val_best_metrics)
-    print_metrics("test", test_metrics)
-
-    print("\nTest confusion matrix")
-    print(np.array(test_metrics["confusion_matrix"]))
-
-    run_dir = (
-        Path(args.save_dir)
-        / MODEL_NAME
-        / f"splitseed_{split_seed}"
-        / f"initseed_{init_seed}"
-        / f"fold_{fold_id}"
+    plot_path = (
+        save_dir
+        / "plots"
+        / "fold_curves"
+        / f"split-{split_seed}_init-{init_seed}_fold-{fold_id:02d}.png"
     )
 
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    history_df = pd.DataFrame(history_rows)
-    predictions_df = pd.DataFrame(
-        train_pred_rows + val_pred_rows + test_pred_rows
+    plot_fold_curves(
+        history=history,
+        save_path=plot_path,
+        title=(
+            f"{save_dir.name} | "
+            f"split={split_seed} | init={init_seed} | fold={fold_id:02d}"
+        ),
     )
 
-    history_path = run_dir / "history.csv"
-    predictions_path = run_dir / "predictions.csv"
-    checkpoint_path = run_dir / "best_model.pt"
-
-    history_df.to_csv(history_path, index=False)
-    predictions_df.to_csv(predictions_path, index=False)
-
-    if args.save_checkpoints:
-        torch.save(
-            {
-                "model_state_dict": best_state_dict,
-                "config": copy.deepcopy(FINAL_CONFIG),
-                "args": vars(args),
-                "split_seed": split_seed,
-                "init_seed": init_seed,
-                "fold": fold_id,
-                "best_epoch": best_epoch,
-                "best_val_bacc": best_val_bacc,
-                "best_val_loss": best_val_loss,
-                "n_classes": n_classes,
-            },
-            checkpoint_path,
-        )
-    else:
-        checkpoint_path = ""
-
-    test_bacc = test_metrics["balanced_acc"]
-    test_acc = test_metrics["acc"]
-    test_macro_f1 = test_metrics["macro_f1"]
-
-    summary_row = {
-        "config": MODEL_NAME,
+    metric_row = {
+        "experiment": save_dir.name,
+        "pp_as": args.pp_as,
+        "aggregate": args.aggregate,
+        "norm": args.norm,
+        "standardize": standardize,
+        "class_weights": not args.no_class_weights,
         "split_seed": split_seed,
         "init_seed": init_seed,
         "fold": fold_id,
         "best_epoch": best_epoch,
-        "best_val_bacc": best_val_bacc,
+        "best_val_balanced_acc": best_val_balanced_acc,
         "best_val_loss": best_val_loss,
-        "F1": FINAL_CONFIG["F1"],
-        "D": FINAL_CONFIG["D"],
-        "F2": FINAL_CONFIG["F2"],
-        "temporal_kern": FINAL_CONFIG["temporal_kern"],
-        "separable_kern": FINAL_CONFIG["separable_kern"],
-        "pool1": FINAL_CONFIG["pool1"],
-        "pool2": FINAL_CONFIG["pool2"],
-        "total_pool": FINAL_CONFIG["pool1"] * FINAL_CONFIG["pool2"],
-        "agg": "meanmax",
-        "meanmax_alpha": args.meanmax_alpha,
-        "lr": args.lr,
-        "weight_decay": args.weight_decay,
-        "dropout": args.dropout,
-        "standardize": standardize,
-        "class_weights": None if class_weights is None else json.dumps(
-            class_weights.detach().cpu().tolist()
-        ),
-        "chance_bacc": chance_bacc,
-        "majority_class": majority_metrics["majority_class"],
-        "majority_test_bacc": majority_metrics["balanced_acc"],
-        "majority_test_acc": majority_metrics["acc"],
-        "majority_test_macro_f1": majority_metrics["macro_f1"],
-        "train_bacc": train_best_metrics["balanced_acc"],
-        "train_acc": train_best_metrics["acc"],
-        "train_macro_f1": train_best_metrics["macro_f1"],
-        "val_bacc": val_best_metrics["balanced_acc"],
-        "val_acc": val_best_metrics["acc"],
-        "val_macro_f1": val_best_metrics["macro_f1"],
-        "test_bacc": test_bacc,
-        "test_acc": test_acc,
-        "test_macro_f1": test_macro_f1,
         "test_loss": test_metrics["loss"],
-        "test_bacc_minus_chance": test_bacc - chance_bacc,
-        "test_bacc_minus_majority": test_bacc - majority_metrics["balanced_acc"],
-        "test_acc_minus_majority": test_acc - majority_metrics["acc"],
-        "test_macro_f1_minus_majority": (
-            test_macro_f1 - majority_metrics["macro_f1"]
-        ),
-        "test_gt_chance": int(test_bacc > chance_bacc),
-        "test_gt_majority_bacc": int(
-            test_bacc > majority_metrics["balanced_acc"]
-        ),
-        "train_pred_counts": json.dumps(train_best_metrics["pred_counts"]),
-        "val_pred_counts": json.dumps(val_best_metrics["pred_counts"]),
-        "test_pred_counts": json.dumps(test_metrics["pred_counts"]),
-        "test_target_counts": json.dumps(test_metrics["target_counts"]),
-        "test_confusion_matrix": json.dumps(test_metrics["confusion_matrix"]),
-        "history_path": str(history_path),
-        "predictions_path": str(predictions_path),
+        "test_acc": test_metrics["acc"],
+        "test_balanced_acc": test_metrics["balanced_acc"],
+        "test_f1_macro": test_metrics["f1_macro"],
+        "plot_path": str(plot_path),
         "checkpoint_path": str(checkpoint_path),
     }
 
-    return summary_row
+    prediction_rows = []
 
-
-def summarize_results(
-    summary_df: pd.DataFrame,
-    save_dir: Path,
-):
-    summary_path = save_dir / "summary.csv"
-    summary_df.to_csv(summary_path, index=False)
-
-    grouped_overall = pd.DataFrame(
-        [
+    for subject_id, yt, yp in zip(names, y_true, y_pred):
+        prediction_rows.append(
             {
-                "config": MODEL_NAME,
-                "n_runs": len(summary_df),
-                "mean_test_bacc": summary_df["test_bacc"].mean(),
-                "std_test_bacc": summary_df["test_bacc"].std(),
-                "median_test_bacc": summary_df["test_bacc"].median(),
-                "min_test_bacc": summary_df["test_bacc"].min(),
-                "max_test_bacc": summary_df["test_bacc"].max(),
-                "mean_test_acc": summary_df["test_acc"].mean(),
-                "std_test_acc": summary_df["test_acc"].std(),
-                "mean_test_macro_f1": summary_df["test_macro_f1"].mean(),
-                "std_test_macro_f1": summary_df["test_macro_f1"].std(),
-                "mean_val_bacc": summary_df["val_bacc"].mean(),
-                "std_val_bacc": summary_df["val_bacc"].std(),
-                "mean_best_epoch": summary_df["best_epoch"].mean(),
-                "frac_test_bacc_gt_chance": summary_df["test_gt_chance"].mean(),
-                "frac_test_bacc_gt_majority": (
-                    summary_df["test_gt_majority_bacc"].mean()
-                ),
-                "mean_test_bacc_minus_chance": (
-                    summary_df["test_bacc_minus_chance"].mean()
-                ),
-                "mean_test_bacc_minus_majority": (
-                    summary_df["test_bacc_minus_majority"].mean()
-                ),
+                "experiment": save_dir.name,
+                "pp_as": args.pp_as,
+                "aggregate": args.aggregate,
+                "norm": args.norm,
+                "standardize": standardize,
+                "class_weights": not args.no_class_weights,
+                "split_seed": split_seed,
+                "init_seed": init_seed,
+                "fold": fold_id,
+                "subject_id": subject_id,
+                "y_true": yt,
+                "y_pred": yp,
             }
-        ]
-    )
-
-    grouped_overall_path = save_dir / "summary_overall.csv"
-    grouped_overall.to_csv(grouped_overall_path, index=False)
-
-    grouped_split_seed = (
-        summary_df
-        .groupby("split_seed")
-        .agg(
-            n_runs=("test_bacc", "count"),
-            mean_test_bacc=("test_bacc", "mean"),
-            std_test_bacc=("test_bacc", "std"),
-            mean_test_acc=("test_acc", "mean"),
-            std_test_acc=("test_acc", "std"),
-            mean_test_macro_f1=("test_macro_f1", "mean"),
-            std_test_macro_f1=("test_macro_f1", "std"),
-            frac_test_bacc_gt_chance=("test_gt_chance", "mean"),
-            frac_test_bacc_gt_majority=("test_gt_majority_bacc", "mean"),
         )
-        .reset_index()
-    )
 
-    grouped_split_seed_path = save_dir / "summary_by_split_seed.csv"
-    grouped_split_seed.to_csv(grouped_split_seed_path, index=False)
+    return metric_row, prediction_rows
 
-    grouped_init_seed = (
-        summary_df
-        .groupby("init_seed")
-        .agg(
-            n_runs=("test_bacc", "count"),
-            mean_test_bacc=("test_bacc", "mean"),
-            std_test_bacc=("test_bacc", "std"),
-            mean_test_acc=("test_acc", "mean"),
-            std_test_acc=("test_acc", "std"),
-            mean_test_macro_f1=("test_macro_f1", "mean"),
-            std_test_macro_f1=("test_macro_f1", "std"),
-            frac_test_bacc_gt_chance=("test_gt_chance", "mean"),
-            frac_test_bacc_gt_majority=("test_gt_majority_bacc", "mean"),
-        )
-        .reset_index()
-    )
 
-    grouped_init_seed_path = save_dir / "summary_by_init_seed.csv"
-    grouped_init_seed.to_csv(grouped_init_seed_path, index=False)
+def inspect_dataset(dataset: EEGDataset) -> None:
+    labels = []
+    shapes = []
 
-    grouped_fold = (
-        summary_df
-        .groupby("fold")
-        .agg(
-            n_runs=("test_bacc", "count"),
-            mean_test_bacc=("test_bacc", "mean"),
-            std_test_bacc=("test_bacc", "std"),
-            mean_test_acc=("test_acc", "mean"),
-            std_test_acc=("test_acc", "std"),
-            mean_test_macro_f1=("test_macro_f1", "mean"),
-            std_test_macro_f1=("test_macro_f1", "std"),
-            frac_test_bacc_gt_chance=("test_gt_chance", "mean"),
-            frac_test_bacc_gt_majority=("test_gt_majority_bacc", "mean"),
-        )
-        .reset_index()
-    )
+    for _, eeg, label in dataset:
+        labels.append(label.item())
+        shapes.append(tuple(eeg.shape))
 
-    grouped_fold_path = save_dir / "summary_by_fold.csv"
-    grouped_fold.to_csv(grouped_fold_path, index=False)
+    label_count = dict(pd.Series(labels).value_counts().sort_index())
 
-    print("\n" + "=" * 100)
-    print("Final summary")
-    print("=" * 100)
+    channels = sorted(set(shape[0] for shape in shapes))
+    lengths = [shape[1] for shape in shapes]
 
-    cols = [
-        "config",
-        "split_seed",
-        "init_seed",
-        "fold",
-        "best_epoch",
-        "val_bacc",
-        "test_bacc",
-        "test_acc",
-        "test_macro_f1",
-        "test_bacc_minus_chance",
-        "test_bacc_minus_majority",
-        "test_pred_counts",
-    ]
+    print("\nDataset inspection:")
+    print(f"Subjects: {len(dataset)}")
+    print(f"Labels:   {label_count}")
+    print("Shapes:")
 
-    print(summary_df[cols].to_string(index=False))
+    if len(channels) == 1:
+        C = channels[0]
 
-    print("\nSummary overall")
-    print(grouped_overall.to_string(index=False))
+        if min(lengths) == max(lengths):
+            print(f"  ({C}, {min(lengths)}): {len(shapes)}")
+        else:
+            print(f"  ({C}, T:{min(lengths)}/{max(lengths)})")
+    else:
+        print(f"  C={channels} | T:{min(lengths)}/{max(lengths)}")
 
-    print("\nSummary by split seed")
-    print(grouped_split_seed.to_string(index=False))
 
-    print("\nSummary by init seed")
-    print(grouped_init_seed.to_string(index=False))
+def print_overall_summary(overall_metrics: pd.DataFrame) -> None:
+    print("\nOverall:")
 
-    print("\nSummary by fold")
-    print(grouped_fold.to_string(index=False))
+    if len(overall_metrics) == 1:
+        print(overall_metrics.iloc[0].to_string())
+    else:
+        for _, row in overall_metrics.iterrows():
+            print("\n" + "-" * 60)
+            print(row.to_string())
 
-    print("\nSaved files")
-    print(f"  summary:                {summary_path}")
-    print(f"  summary_overall:        {grouped_overall_path}")
-    print(f"  summary_by_split_seed:  {grouped_split_seed_path}")
-    print(f"  summary_by_init_seed:   {grouped_init_seed_path}")
-    print(f"  summary_by_fold:        {grouped_fold_path}")
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--k", type=int, default=5)
+    parser.add_argument("--folds", type=int, nargs="+", default=None)
+    parser.add_argument("--inner-splits", type=int, default=5)
+
+    parser.add_argument("--split-seeds", type=int, nargs="+", default=DEFAULT_SPLIT_SEEDS)
+    parser.add_argument("--init-seeds", type=int, nargs="+", default=DEFAULT_INIT_SEEDS)
+
+    parser.add_argument("--rand-split-seed", action="store_true")
+    parser.add_argument("--rand-init-seed", action="store_true")
+    parser.add_argument("--n-rand-split-seeds", type=int, default=RANDOM_SEED_COUNT)
+    parser.add_argument("--n-rand-init-seeds", type=int, default=RANDOM_SEED_COUNT)
+    parser.add_argument("--seed-max", type=int, default=RANDOM_SEED_MAX)
+
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--epochs", type=int, default=60)
+    parser.add_argument("--patience", type=int, default=20)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--grad-clip", type=parse_optional_float, default=1.0)
+    parser.add_argument("--num-workers", type=int, default=0)
+
+    parser.add_argument("--lowcut", type=parse_optional_float, default=0.5)
+    parser.add_argument("--highcut", type=parse_optional_float, default=60.0)
+    parser.add_argument("--notch", type=parse_optional_float, default=50.0)
+    parser.add_argument("--target-fs", type=parse_optional_float, default=None)
+    parser.add_argument("--default-fs", type=float, default=128.0)
+    parser.add_argument("--duration-sec", type=parse_optional_float, default=None)
+    parser.add_argument("--pp-as", type=str, default="tensor", choices=["tensor", "list"])
+
+    parser.add_argument("--F1", type=int, default=8)
+    parser.add_argument("--D", type=int, default=2)
+    parser.add_argument("--F2", type=int, default=16)
+    parser.add_argument("--temporal-kern", type=int, default=63)
+    parser.add_argument("--separable-kern", type=int, default=15)
+    parser.add_argument("--pool1", type=int, default=8)
+    parser.add_argument("--pool2", type=int, default=8)
+    parser.add_argument("--aggregate", type=parse_bool, default=True)
+    parser.add_argument("--norm", type=str, default="auto", choices=["auto", "batch", "group"])
+    parser.add_argument("--meanmax-alpha", type=float, default=0.5)
+
+    parser.add_argument("--no-class-weights", action="store_true")
+    parser.add_argument("--no-standardize", action="store_true")
+
+    parser.add_argument("--inspect-shapes", action="store_true")
+    parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument("--print-every", type=int, default=5)
+
+    parser.add_argument("--save-dir", type=str, default="eegnet_tensor_agg")
+
+    return parser.parse_args()
 
 
 def main():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--condition", type=str, default="closed")
-    parser.add_argument("--k", type=int, default=5)
-    parser.add_argument("--folds", type=int, nargs="+", default=[0, 1, 2, 3, 4])
-
-    parser.add_argument(
-        "--split-seeds",
-        type=int,
-        nargs="+",
-        default=DEFAULT_SPLIT_SEEDS,
-        help=(
-            "Semillas para generar las particiones StratifiedGroupKFold. "
-            "Default: mejor split_seed observado, 3407."
-        ),
-    )
-
-    parser.add_argument(
-        "--rand-split-seed",
-        action="store_true",
-        help=(
-            "Usa 20 semillas aleatorias entre 0 y 10000 para split-seeds."
-        ),
-    )
-
-    parser.add_argument(
-        "--init-seeds",
-        type=int,
-        nargs="+",
-        default=DEFAULT_INIT_SEEDS,
-        help=(
-            "Semillas para inicialización, dropout y orden de entrenamiento. "
-            "Default: mejor init_seed observado, 2025."
-        ),
-    )
-
-    parser.add_argument(
-        "--rand-init-seed",
-        action="store_true",
-        help=(
-            "Usa 20 semillas aleatorias entre 0 y 10000 para init-seeds."
-        ),
-    )
-
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--patience", type=int, default=10)
-
-    parser.add_argument("--lr", type=float, default=FINAL_CONFIG["lr"])
-    parser.add_argument("--weight-decay", type=float, default=FINAL_CONFIG["weight_decay"])
-    parser.add_argument("--dropout", type=float, default=FINAL_CONFIG["dropout"])
-    parser.add_argument("--meanmax-alpha", type=float, default=FINAL_CONFIG["meanmax_alpha"])
-
-    parser.add_argument("--grad-clip", type=float, default=1.0)
-    parser.add_argument("--n-channels", type=int, default=FINAL_CONFIG["n_channels"])
-    parser.add_argument("--num-workers", type=int, default=0)
-
-    parser.add_argument("--no-standardize", action="store_true")
-    parser.add_argument("--no-class-weights", action="store_true")
-    parser.add_argument("--inspect-shapes", action="store_true")
-    parser.add_argument("--save-checkpoints", action="store_true")
-
-    parser.add_argument(
-        "--save-dir",
-        type=str,
-        default="outputs/eeg_ct/baseline_official_eegnet_small_t600_meanmax050",
-    )
-
-    args = parser.parse_args()
-
-    if not 0.0 <= args.meanmax_alpha <= 1.0:
-        raise ValueError(
-            f"--meanmax-alpha must be in [0, 1], got {args.meanmax_alpha}"
-        )
+    args = parse_args()
 
     if args.rand_split_seed:
-        args.split_seeds = sorted(generate_random_seeds())
+        args.split_seeds = sample_random_seeds(args.n_rand_split_seeds, args.seed_max)
 
     if args.rand_init_seed:
-        args.init_seeds = sorted(generate_random_seeds())
+        args.init_seeds = sample_random_seeds(args.n_rand_init_seeds, args.seed_max)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    save_dir = resolve_save_dir(args.save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_config(args, save_dir)
 
     print(f"\nDevice: {device}")
+    print(f"Experiment: {save_dir.name}")
+    print(f"Save dir: {save_dir}")
+    print(f"pp_as: {args.pp_as}")
+    print(f"aggregate: {args.aggregate}")
+    print(F"norm: {args.norm}")
+    print(f"standardize: {not args.no_standardize}")
+    print(f"class_weights: {not args.no_class_weights}")
+    print(f"split_seeds: {args.split_seeds}")
+    print(f"init_seeds:  {args.init_seeds}")
 
-    dataset = EEGDataset(condition=args.condition)
+    dataset = EEGDataset(
+        adhd_dir=PROJECT_ROOT / "data/raw/adhd_control/ADHD",
+        control_dir=PROJECT_ROOT / "data/raw/adhd_control/Control",
+        lowcut=args.lowcut,
+        highcut=args.highcut,
+        notch=args.notch,
+        default_fs=args.default_fs,
+        target_fs=args.target_fs,
+        duration_sec=args.duration_sec,
+        pp_as=args.pp_as,
+    )
 
-    labels = [label_to_int(v) for v in dataset.get_labels()]
-    n_classes = int(max(labels)) + 1
+    if args.inspect_shapes:
+        inspect_dataset(dataset)
 
-    print("\nDataset")
-    print(f"  condition: {args.condition}")
-    print(f"  subjects:  {len(dataset)}")
-    print(f"  labels:    {dict(Counter(labels))}")
-    print(f"  n_classes: {n_classes}")
+    if args.validate_only:
+        return
 
-    print("\nOfficial baseline model")
-    print(f"  name:             {MODEL_NAME}")
-    print(f"  input:            X_s in R^{{24 x T_s}}")
-    print(f"  temporal logits:  A_s in R^{{T'_s x 3}}")
-    print(f"  expected T'_s:    approx 600 for T_s approx 38400")
-    print(f"  aggregation:      b_s = 0.5 mean_t(A_s) + 0.5 max_t(A_s)")
-    print(f"  loss:             CrossEntropyLoss(b_s, y_s)")
+    first_eeg = dataset[0][1]
+    n_channels = first_eeg.shape[0]
 
-    print("\nExecution design")
-    print(f"  split_seeds:      {args.split_seeds}")
-    print(f"  init_seeds:       {args.init_seeds}")
-    print(f"  folds:            {args.folds}")
-    print(f"  total runs:       {len(args.split_seeds) * len(args.init_seeds) * len(args.folds)}")
+    labels = [dataset[i][2].item() for i in range(len(dataset))]
+    n_classes = len(set(labels))
+    class_names = [str(i) for i in range(n_classes)]
 
-    save_dir = Path(args.save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
+    print(
+        f"\nDataset: subjects={len(dataset)} | "
+        f"C={n_channels} | classes={n_classes}"
+    )
 
-    all_summary_rows = []
+    all_metric_rows = []
+    all_prediction_rows = []
 
     for split_seed in args.split_seeds:
-        print("\n" + "#" * 100)
-        print(f"Creating folds with split_seed={split_seed}")
-        print("#" * 100)
-
-        set_seed(split_seed)
-
-        folds = create_kfold_dataloaders(
-            dataset,
-            k=args.k,
+        folds = create_dataloaders(
+            dataset=dataset,
+            k_folder=args.k,
             batch_size=args.batch_size,
             shuffle=True,
             split_seed=split_seed,
+            inner_split=args.inner_splits,
             num_workers=args.num_workers,
-            pin_memory=(device.type == "cuda"),
+            pin_memory=torch.cuda.is_available(),
         )
 
-        for fold_idx in args.folds:
-            if fold_idx < 0 or fold_idx >= len(folds):
-                raise ValueError(
-                    f"Fold index must be in [0, {len(folds) - 1}], got {fold_idx}"
+        selected_folds = args.folds
+        if selected_folds is None:
+            selected_folds = list(range(1, len(folds) + 1))
+
+        print(f"\nsplit_seed={split_seed} | folds={selected_folds}")
+
+        for init_seed in args.init_seeds:
+            for fold_id, (train_loader, val_loader, test_loader) in enumerate(
+                folds,
+                start=1,
+            ):
+                if fold_id not in selected_folds:
+                    continue
+
+                print(
+                    f"  fold={fold_id:02d} | "
+                    f"init_seed={init_seed} | "
+                    f"pp_as={args.pp_as} | "
+                    f"aggregate={args.aggregate}"
                 )
 
-        for fold_idx in args.folds:
-            train_loader, val_loader, test_loader = folds[fold_idx]
-
-            for init_seed in args.init_seeds:
-                summary_row = run_one_training(
-                    dataset=dataset,
+                metric_row, prediction_rows = train_one_fold(
+                    args=args,
                     train_loader=train_loader,
                     val_loader=val_loader,
                     test_loader=test_loader,
-                    args=args,
-                    device=device,
-                    n_classes=n_classes,
                     split_seed=split_seed,
                     init_seed=init_seed,
-                    fold_idx=fold_idx,
+                    fold_id=fold_id,
+                    n_channels=n_channels,
+                    n_classes=n_classes,
+                    device=device,
+                    save_dir=save_dir,
                 )
 
-                all_summary_rows.append(summary_row)
+                all_metric_rows.append(metric_row)
+                all_prediction_rows.extend(prediction_rows)
 
-                partial_df = pd.DataFrame(all_summary_rows)
-                partial_df.to_csv(save_dir / "summary_partial.csv", index=False)
+                print(
+                    f"    test_acc={metric_row['test_acc']:.4f} | "
+                    f"test_bal_acc={metric_row['test_balanced_acc']:.4f} | "
+                    f"test_f1={metric_row['test_f1_macro']:.4f}"
+                )
 
-    summary_df = pd.DataFrame(all_summary_rows)
+    fold_metrics = pd.DataFrame(all_metric_rows)
+    predictions = pd.DataFrame(all_prediction_rows)
 
-    summarize_results(
-        summary_df=summary_df,
-        save_dir=save_dir,
+    fold_metrics_path = save_dir / "fold_metrics.csv"
+    predictions_path = save_dir / "predictions.csv"
+
+    fold_metrics.to_csv(fold_metrics_path, index=False)
+    predictions.to_csv(predictions_path, index=False)
+
+    overall_metrics = (
+        fold_metrics
+        .groupby(["experiment", "pp_as", "aggregate", "norm", "standardize", "class_weights"])
+        .agg(
+            test_acc_mean=("test_acc", "mean"),
+            test_acc_std=("test_acc", "std"),
+            test_balanced_acc_mean=("test_balanced_acc", "mean"),
+            test_balanced_acc_std=("test_balanced_acc", "std"),
+            test_f1_macro_mean=("test_f1_macro", "mean"),
+            test_f1_macro_std=("test_f1_macro", "std"),
+            test_loss_mean=("test_loss", "mean"),
+            test_loss_std=("test_loss", "std"),
+            best_val_balanced_acc_mean=("best_val_balanced_acc", "mean"),
+            best_epoch_mean=("best_epoch", "mean"),
+        )
+        .reset_index()
     )
+
+    overall_metrics_path = save_dir / "overall_metrics.csv"
+    overall_metrics.to_csv(overall_metrics_path, index=False)
+
+    cm_path = save_dir / "plots" / "confusion_matrix_global.png"
+
+    plot_confusion_matrix(
+        y_true=predictions["y_true"].tolist(),
+        y_pred=predictions["y_pred"].tolist(),
+        class_names=class_names,
+        save_path=cm_path,
+        title=f"{save_dir.name} global confusion matrix",
+        normalize=False,
+    )
+
+    print_overall_summary(overall_metrics)
+
+    print("\nSaved:")
+    print(f"  {fold_metrics_path}")
+    print(f"  {overall_metrics_path}")
+    print(f"  {predictions_path}")
+    print(f"  {cm_path}")
 
 
 if __name__ == "__main__":

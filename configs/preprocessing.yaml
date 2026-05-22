@@ -1,7 +1,7 @@
 ## EEG preprocessing
 eeg:
-  raw_data_dir: "data/raw"
-  output_dir: "data/processed/EEG"
+  raw_data_dir: "data/raw/pain_db/"
+  output_dir: "data/processed/pain_db/"
   lowcut: 0.5
   highcut: 45.0
   notch: null
@@ -14,8 +14,8 @@ eeg:
 
 ## Questionnaire preprocessing
 questionnaire:
-  raw_data_path: "data/raw/Demo_Questionnaires.xlsx"
-  output_dir: "data/processed/questionnaire"
+  raw_data_path: "data/raw/pain_db/Demo_Questionnaires.xlsx"
+  output_dir: "data/processed/pain_db/questionnaire"
 
   # Row indices to exclude (e.g. header rows, footnotes)
   rows_to_drop: [36, 37, 38, 39]

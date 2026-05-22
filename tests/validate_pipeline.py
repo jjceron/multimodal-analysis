@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from src.data import EEGDataset, create_kfold_dataloaders
+from src.datasets import EEGDataset, create_kfold_dataloaders
 from src.models.eegnet import EEGNet
 from src.utils.eeg_utils import load_yaml
 

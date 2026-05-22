@@ -6,7 +6,7 @@ from collections import Counter
 
 import pandas as pd
 
-from src.data.build_iranies import EEGDataset_ADHD
+from src.datasets.adhd_dataset import EEGDataset_ADHD
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

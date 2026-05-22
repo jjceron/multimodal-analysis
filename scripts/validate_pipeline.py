@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from src.data import build_dataset, build_eeg
+from src.datasets import build_eeg, pain_dataset
 from src.models.eegnet import EEGNet
 from src.utils.eeg_utils import load_yaml
 
@@ -64,7 +64,7 @@ def get_k_for_dataset(labels: list[int], requested_k: int) -> int:
 
 
 def summarize_subject_dataset(
-    dataset: build_dataset.EEGDataset,
+    dataset: pain_dataset.EEGDataset,
     out_dir: Path,
 ) -> dict:
     summary_df = dataset.get_summary_dataframe()
@@ -119,7 +119,7 @@ def check_subject_pipeline(
 ) -> dict:
     report: dict[str, object] = {"mode": "subject"}
 
-    dataset = build_dataset.EEGDataset(
+    dataset = pain_dataset.EEGDataset(
         config_path=args.config_path,
         condition=args.condition,
     )
@@ -133,7 +133,7 @@ def check_subject_pipeline(
     n_classes = 3
     k = get_k_for_dataset(labels, args.k)
 
-    folds = build_dataset.create_kfold_dataloaders(
+    folds = pain_dataset.create_kfold_dataloaders(
         dataset,
         k=k,
         batch_size=args.batch_size,

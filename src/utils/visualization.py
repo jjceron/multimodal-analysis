@@ -1,139 +1,134 @@
+from __future__ import annotations
+
 from pathlib import Path
 
-import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 
-def plot_fold_training_history(
-    history_csv: str | Path,
-    output_dir: str | Path | None = None,
-    output_path: str | Path | None = None,
-    prefix: str = "loss",
-) -> list[Path]:
+def plot_fold_curves(
+    history: dict[str, list[float]],
+    save_path: str | Path,
+    title: str,
+) -> None:
     """
-    Genera un PNG separado por fold.
+    Save one plot per fold with loss curves and validation accuracy.
 
-    Espera columnas:
-        epoch, fold, train_loss, val_loss
-
-    También acepta:
-        val_epoch_loss
-
-    Si hay split_seed e init_seed, los usa en el nombre del archivo.
+    Expected history keys:
+        train_loss
+        val_loss
+        val_acc
     """
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    history_csv = Path(history_csv)
+    epochs = np.arange(1, len(history["train_loss"]) + 1)
 
-    if output_dir is None:
-        if output_path is None:
-            output_dir = history_csv.parent / "plots"
-        else:
-            output_path = Path(output_path)
+    fig, ax_loss = plt.subplots(figsize=(8, 5))
 
-            # Compatibilidad con código viejo que pasaba un archivo .png
-            if output_path.suffix:
-                output_dir = output_path.parent
-            else:
-                output_dir = output_path
+    ax_loss.plot(epochs, history["train_loss"], label="train loss")
+    ax_loss.plot(epochs, history["val_loss"], label="val loss")
+    ax_loss.set_xlabel("Epoch")
+    ax_loss.set_ylabel("Loss")
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    ax_acc = ax_loss.twinx()
+    ax_acc.plot(epochs, history["val_acc"], linestyle="--", label="val acc")
+    ax_acc.set_ylabel("Validation accuracy")
+    ax_acc.set_ylim(0.0, 1.0)
 
-    df = pd.read_csv(history_csv)
+    lines_loss, labels_loss = ax_loss.get_legend_handles_labels()
+    lines_acc, labels_acc = ax_acc.get_legend_handles_labels()
 
-    if "fold" not in df.columns:
-        df["fold"] = 1
+    ax_loss.legend(
+        lines_loss + lines_acc,
+        labels_loss + labels_acc,
+        loc="best",
+    )
 
-    if "val_loss" in df.columns:
-        val_col = "val_loss"
-    elif "val_epoch_loss" in df.columns:
-        val_col = "val_epoch_loss"
+    ax_loss.set_title(title)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_confusion_matrix(
+    y_true: list[int] | np.ndarray,
+    y_pred: list[int] | np.ndarray,
+    class_names: list[str],
+    save_path: str | Path,
+    title: str = "Global confusion matrix",
+    normalize: bool = False,
+) -> None:
+    """
+    Save a global confusion matrix.
+
+    Args:
+        y_true: ground-truth labels.
+        y_pred: predicted labels.
+        class_names: names displayed on axes.
+        save_path: output image path.
+        title: plot title.
+        normalize: if True, normalize rows by support.
+    """
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+
+    n_classes = len(class_names)
+    cm = np.zeros((n_classes, n_classes), dtype=np.float64)
+
+    for t, p in zip(y_true, y_pred):
+        cm[int(t), int(p)] += 1.0
+
+    if normalize:
+        row_sum = cm.sum(axis=1, keepdims=True)
+        cm_plot = np.divide(
+            cm,
+            row_sum,
+            out=np.zeros_like(cm),
+            where=row_sum != 0,
+        )
     else:
-        raise ValueError(
-            "No encontré columna de validación. "
-            "Debe existir 'val_loss' o 'val_epoch_loss'."
-        )
+        cm_plot = cm
 
-    required_cols = {"epoch", "fold", "train_loss", val_col}
-    missing = required_cols - set(df.columns)
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(cm_plot)
 
-    if missing:
-        raise ValueError(f"Faltan columnas en {history_csv}: {sorted(missing)}")
+    fig.colorbar(im, ax=ax)
 
-    group_cols = []
+    ax.set_xticks(np.arange(n_classes))
+    ax.set_yticks(np.arange(n_classes))
+    ax.set_xticklabels(class_names)
+    ax.set_yticklabels(class_names)
 
-    if "split_seed" in df.columns:
-        group_cols.append("split_seed")
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("True")
+    ax.set_title(title)
 
-    if "init_seed" in df.columns:
-        group_cols.append("init_seed")
+    threshold = cm_plot.max() / 2.0 if cm_plot.size and cm_plot.max() > 0 else 0.0
 
-    group_cols.append("fold")
+    for i in range(n_classes):
+        for j in range(n_classes):
+            if normalize:
+                text = f"{cm_plot[i, j]:.2f}\n({int(cm[i, j])})"
+            else:
+                text = str(int(cm[i, j]))
 
-    saved_paths: list[Path] = []
-
-    for group_key, group_df in df.groupby(group_cols):
-        group_df = group_df.sort_values("epoch")
-
-        if not isinstance(group_key, tuple):
-            group_key = (group_key,)
-
-        group_info = dict(zip(group_cols, group_key))
-
-        fold = int(group_info["fold"])
-
-        name_parts = [prefix]
-
-        if "split_seed" in group_info:
-            name_parts.append(f"splitseed_{int(group_info['split_seed'])}")
-
-        if "init_seed" in group_info:
-            name_parts.append(f"initseed_{int(group_info['init_seed'])}")
-
-        name_parts.append(f"fold_{fold:02d}")
-
-        output_file = output_dir / ("_".join(name_parts) + ".png")
-
-        fig, ax = plt.subplots(figsize=(8, 5))
-
-        ax.plot(
-            group_df["epoch"],
-            group_df["train_loss"],
-            marker="o",
-            linestyle="-",
-            label="Train loss",
-        )
-
-        ax.plot(
-            group_df["epoch"],
-            group_df[val_col],
-            marker="s",
-            linestyle="--",
-            label="Validation loss",
-        )
-
-        title = f"Fold {fold} - Training / validation loss"
-
-        if "split_seed" in group_info and "init_seed" in group_info:
-            title += (
-                f" | split_seed={int(group_info['split_seed'])}"
-                f" | init_seed={int(group_info['init_seed'])}"
+            ax.text(
+                j,
+                i,
+                text,
+                ha="center",
+                va="center",
+                color="white" if cm_plot[i, j] > threshold else "black",
             )
 
-        ax.set_title(title)
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Loss")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-
-        fig.tight_layout()
-        fig.savefig(output_file, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-
-        saved_paths.append(output_file)
-
-    print("\nSaved fold plots:")
-    for path in saved_paths:
-        print(f"  {path}")
-
-    return saved_paths
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)

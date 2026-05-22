@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 from src.models.eegnet import EEGNet
-from src.data.build_iranies import EEGDataset_ADHD, create_kfold_dataloaders_
+from src.datasets.adhd_dataset import EEGDataset_ADHD, create_kfold_dataloaders_
 
 
 def expected_t_prime(T: int, pool1: int, pool2: int) -> int:
