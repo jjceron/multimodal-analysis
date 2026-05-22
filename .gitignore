@@ -35,3 +35,9 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+outputs/*
+!outputs/**/
+outputs/**/*
+!outputs/adhd_db/summary.md
+!outputs/npain_db/summary.md
