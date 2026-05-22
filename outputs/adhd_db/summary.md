@@ -201,11 +201,9 @@ Con `norm = auto`, el modelo usa `BatchNorm2d` en modo `tensor` y `GroupNorm` en
 
 ## BatchNorm2d vs GroupNorm
 
-En modo `tensor`, el modelo recibe batches reales con forma $\rm R^{B \times C \times T}$, que internamente se convierten a $\rm R^{B \times 1 \times C \times T}$. En ese caso, `BatchNorm2d` es apropiada porque estima estadísticas usando el batch y las dimensiones espaciales/temporales.
+En modo `tensor`, el modelo recibe batches con forma $\rm R^{B \times C \times T}$, donde $B > 1$ durante entrenamiento. Tras añadir la dimensión interna, el tensor pasa a $\rm R^{B \times 1 \times C \times T}$. En este caso, `BatchNorm2d` es la opción natural porque normaliza usando estadísticas del batch y aprovecha que las muestras se procesan juntas.
 
-En modo `list`, los sujetos pueden tener longitudes $T_s$ distintas. Cuando no se pueden apilar, el forward se ejecuta por sujeto con batch efectivo $B = 1$. En ese escenario, `BatchNorm2d` deja de estimar estadísticas representativas del conjunto y puede volverse inestable.
-
-Por eso, `GroupNorm` es más adecuada para `list`: normaliza grupos de canales dentro de cada muestra y no depende del tamaño del batch. No existe una capa estándar llamada `GroupNorm2d` en PyTorch porque `nn.GroupNorm` ya opera sobre tensores convolucionales con forma $\rm R^{N \times C \times H \times W}$.
+En modo `list`, en cambio, los sujetos pueden tener longitudes temporales distintas. Cuando no se pueden apilar, el forward se ejecuta sujeto por sujeto, con batch efectivo $B = 1$. En ese escenario, `BatchNorm2d` deja de ser una buena opción, porque sus estadísticas dependen del batch y no son estables con una sola muestra. Por eso `GroupNorm` es más adecuada para `list`: normaliza dentro de cada muestra y no depende del tamaño del batch.
 
 ## Versiones evaluadas
 
