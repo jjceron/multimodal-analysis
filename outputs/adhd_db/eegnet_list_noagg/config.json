@@ -26,6 +26,7 @@
     "n_rand_split_seeds": 3,
     "no_class_weights": false,
     "no_standardize": false,
+    "norm": "auto",
     "notch": 50.0,
     "num_workers": 0,
     "patience": 35,

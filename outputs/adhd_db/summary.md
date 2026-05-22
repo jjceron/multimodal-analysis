@@ -205,10 +205,10 @@ La tabla está ordenada por `test_balanced_acc_mean`, de mejor a peor. Solo se i
 | 8 | `eegnet_tensor_aggmeanmax100` | tensor | true | BatchNorm | 1.0 | full | 0.465556 | 0.465812 | 0.444730 | 0.782775 | 0.603333 | Usar máximo puro fue la peor configuración. |
 | 9 | `eegnet_list_full_aggmean_groupnorm` | list | true | GroupNorm | 0.0 | full variable | 0.702444 | 0.702136 | 0.693267 | 0.607755 | 0.746666 | La agregación por media en lista con apilamiento cuando es posible queda muy cerca del mejor tensor. |
 | 10 | `eegnet_list_62s_noagg_stackfix` | list | false | GroupNorm | — | 62 s | 0.699444 | 0.699573 | 0.692648 | 0.633873 | 0.730000 | La corrección de apilamiento mejora fuertemente el modo lista. |
-| 11 | `eegnet_list_full_aggmean_batchnorm` | list | true | BatchNorm | 0.0 | full variable | 0.597000 | 0.597009 | 0.583097 | 0.697448 | 0.703333 | BatchNorm en lista completa quedó por debajo de GroupNorm en la misma configuración de agregación. |
-| 12 | `eegnet_list_aggmean` | list | true | GroupNorm | 0.0 | full variable | 0.597000 | 0.597009 | 0.583097 | 0.697444 | 0.703333 | La agregación por media en lista sin apilamiento no alcanzó el rendimiento del mejor caso con GroupNorm. |
-| 13 | `eegnet_list_62s_noagg` | list | false | GroupNorm | — | 62 s | 0.539222 | 0.540812 | 0.507884 | 0.696109 | 0.730000 | Antes del `stackfix`, el modo lista 62 s quedaba muy por debajo. |
-| 14 | `eegnet_list_noagg` | list | false | GroupNorm | — | full variable | 0.509778 | 0.510256 | 0.469375 | 0.694999 | 0.670000 | La lista sin agregación ni corrección no fue competitiva. |
+| 11 | `eegnet_list_noagg` | list | false | GroupNorm | — | full variable | 0.646778 | 0.646581 | 0.632720 | 0.683334 | 0.746667 | La lista sin agregación mejora claramente respecto a la corrida anterior y queda por encima de las variantes de lista con agregación mal ajustada. |
+| 12 | `eegnet_list_full_aggmean_batchnorm` | list | true | BatchNorm | 0.0 | full variable | 0.597000 | 0.597009 | 0.583097 | 0.697448 | 0.703333 | BatchNorm en lista completa quedó por debajo de GroupNorm en la misma configuración de agregación. |
+| 13 | `eegnet_list_aggmean` | list | true | GroupNorm | 0.0 | full variable | 0.597000 | 0.597009 | 0.583097 | 0.697444 | 0.703333 | La agregación por media en lista sin apilamiento no alcanzó el rendimiento del mejor caso con GroupNorm. |
+| 14 | `eegnet_list_62s_noagg` | list | false | GroupNorm | — | 62 s | 0.539222 | 0.540812 | 0.507884 | 0.696109 | 0.730000 | Antes del `stackfix`, el modo lista 62 s quedaba muy por debajo. |
 
 ## Comparación puntual de normalización
 
