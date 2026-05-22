@@ -1,2 +1,0 @@
-experiment,pp_as,aggregate,standardize,class_weights,test_acc_mean,test_acc_std,test_balanced_acc_mean,test_balanced_acc_std,test_f1_macro_mean,test_f1_macro_std,test_loss_mean,test_loss_std,best_val_balanced_acc_mean,best_epoch_mean
-eegnet_tensor_aggmeanmax010,tensor,True,True,True,0.6357777777777778,0.10495060566585424,0.6356837606837608,0.10472109893742716,0.6180330303405082,0.12673382879867093,0.675798460483551,0.18904443975868118,0.6799999999999999,38.733333333333334
