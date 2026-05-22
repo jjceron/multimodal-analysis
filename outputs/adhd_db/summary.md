@@ -217,24 +217,25 @@ Se evaluaron las siguientes variantes:
 - `list + GroupNorm + aggregate=true + alpha=0.0`: procesa sujetos como lista con agregación por media.
 - `list + 62s + stackfix`: versión corregida para apilar cuando las longitudes del batch coinciden.
 
-## Resultados
+## Results
 
 La tabla está ordenada por `test_balanced_acc_mean`, de mejor a peor. Solo se incluyen filas con bloque `Overall` completo.
 
 | Rank | Experimento | Entrada | Agregación | Norm | Alpha | Duración | Test acc | Test balanced acc | F1 macro | Test loss | Best val balanced acc | Hallazgo principal |
 |---:|---|---|---:|---|---:|---|---:|---:|---:|---:|---:|---|
 | 1 | `eegnet_tensor_aggmean` | tensor | true | BatchNorm | 0.0 | full recortado | 0.722000 | 0.722009 | 0.717305 | 0.597233 | 0.750000 | Mejor resultado global; la media temporal pura fue la agregación más estable. |
-| 2 | `eegnet_tensor_noagg4` | tensor | false | BatchNorm | — | full recortado | 0.718889 | 0.719231 | 0.709601 | 0.640070 | 0.740000 | Muy cercano al mejor; preservar logits temporales y votar funciona bien. |
+| 2 | `eegnet_tensor_noagg` | tensor | false | BatchNorm | — | full recortado | 0.718889 | 0.719231 | 0.709601 | 0.640070 | 0.740000 | Muy cercano al mejor; preservar logits temporales y votar funciona bien. |
 | 3 | `eegnet_tensor_62s_noagg` | tensor | false | BatchNorm | — | 62 s | 0.702222 | 0.702350 | 0.694846 | 0.633168 | 0.726667 | Recortar a 62 s reduce poco el rendimiento frente al tensor completo sin agregación. |
-| 4 | `eegnet_list_62s_noagg_stackfix` | list | false | GroupNorm | — | 62 s | 0.699444 | 0.699573 | 0.692648 | 0.633873 | 0.730000 | La corrección de apilamiento mejora fuertemente el modo lista. |
-| 5 | `eegnet_tensor_aggmeanmax010` | tensor | true | BatchNorm | 0.1 | full recortado | 0.635778 | 0.635684 | 0.618033 | 0.675798 | 0.680000 | Añadir componente máximo degrada el rendimiento frente a media pura. |
-| 6 | `eegnet_tensor_aggmean_groupnorm` | tensor | true | GroupNorm | 0.0 | full recortado | 0.616889 | 0.616026 | 0.594341 | 0.641366 | 0.690000 | En tensor, GroupNorm fue peor que BatchNorm. |
-| 7 | `eegnet_list_aggmean` | list | true | GroupNorm | 0.0 | full variable | 0.597000 | 0.597009 | 0.583097 | 0.697444 | 0.703333 | La agregación por media en lista no alcanzó el rendimiento de tensor. |
-| 8 | `eegnet_tensor_aggmeanmax020` | tensor | true | BatchNorm | 0.2 | full recortado | 0.572667 | 0.573291 | 0.552308 | 0.691571 | 0.653333 | Aumentar `alpha` empeora la clasificación. |
-| 9 | `eegnet_list_62s_noagg` | list | false | GroupNorm | — | 62 s | 0.539222 | 0.540812 | 0.507884 | 0.696109 | 0.730000 | Antes del `stackfix`, el modo lista 62 s quedaba muy por debajo. |
-| 10 | `eegnet_list_noagg` | list | false | GroupNorm | — | full variable | 0.509778 | 0.510256 | 0.469375 | 0.694999 | 0.670000 | La lista sin agregación ni corrección no fue competitiva. |
-| 11 | `eegnet_tensor_aggmeanmax050` | tensor | true | BatchNorm | 0.5 | full recortado | 0.495667 | 0.496154 | 0.460808 | 0.711105 | 0.586667 | La mezcla media-máximo con peso alto se aproxima a azar. |
-| 12 | `eegnet_tensor_aggmeanmax100` | tensor | true | BatchNorm | 1.0 | full recortado | 0.465556 | 0.465812 | 0.444730 | 0.782775 | 0.603333 | Usar máximo puro fue la peor configuración. |
+| 4 | `eegnet_list_full_aggmean_groupnorm` | list | true | GroupNorm | 0.0 | full variable | 0.702444 | 0.702136 | 0.693267 | 0.607755 | 0.746666 | La agregación por media en lista con apilamiento cuando es posible queda muy cerca del mejor tensor. |
+| 5 | `eegnet_list_62s_noagg_stackfix` | list | false | GroupNorm | — | 62 s | 0.699444 | 0.699573 | 0.692648 | 0.633873 | 0.730000 | La corrección de apilamiento mejora fuertemente el modo lista. |
+| 6 | `eegnet_tensor_aggmeanmax010` | tensor | true | BatchNorm | 0.1 | full recortado | 0.635778 | 0.635684 | 0.618033 | 0.675798 | 0.680000 | Añadir componente máximo degrada el rendimiento frente a media pura. |
+| 7 | `eegnet_tensor_aggmean_groupnorm` | tensor | true | GroupNorm | 0.0 | full recortado | 0.616889 | 0.616026 | 0.594341 | 0.641366 | 0.690000 | En tensor, GroupNorm fue peor que BatchNorm. |
+| 8 | `eegnet_list_aggmean` | list | true | GroupNorm | 0.0 | full variable | 0.597000 | 0.597009 | 0.583097 | 0.697444 | 0.703333 | La agregación por media en lista no alcanzó el rendimiento de tensor. |
+| 9 | `eegnet_tensor_aggmeanmax020` | tensor | true | BatchNorm | 0.2 | full recortado | 0.572667 | 0.573291 | 0.552308 | 0.691571 | 0.653333 | Aumentar `alpha` empeora la clasificación. |
+| 10 | `eegnet_list_62s_noagg` | list | false | GroupNorm | — | 62 s | 0.539222 | 0.540812 | 0.507884 | 0.696109 | 0.730000 | Antes del `stackfix`, el modo lista 62 s quedaba muy por debajo. |
+| 11 | `eegnet_list_noagg` | list | false | GroupNorm | — | full variable | 0.509778 | 0.510256 | 0.469375 | 0.694999 | 0.670000 | La lista sin agregación ni corrección no fue competitiva. |
+| 12 | `eegnet_tensor_aggmeanmax050` | tensor | true | BatchNorm | 0.5 | full recortado | 0.495667 | 0.496154 | 0.460808 | 0.711105 | 0.586667 | La mezcla media-máximo con peso alto se aproxima a azar. |
+| 13 | `eegnet_tensor_aggmeanmax100` | tensor | true | BatchNorm | 1.0 | full recortado | 0.465556 | 0.465812 | 0.444730 | 0.782775 | 0.603333 | Usar máximo puro fue la peor configuración. |
 
 ## Comparación puntual de normalización
 
@@ -244,9 +245,7 @@ La comparación directa indica que, para entrada `tensor` con agregación por me
 |---|---:|
 | tensor + BatchNorm + aggregate mean | 0.722009 |
 | tensor + GroupNorm + aggregate mean | 0.616026 |
-| list full + GroupNorm + aggregate mean | 0.702137 |
-
-Nota de consistencia: en el bloque `Overall` completo pegado para `eegnet_list_aggmean` aparece `test_balanced_acc_mean = 0.597009`, mientras que la comparación puntual reporta `list full + GroupNorm + aggregate mean = 0.702137`. Si este último valor corresponde a una corrida posterior o corregida, debe conservarse como resultado actualizado; si corresponde al mismo experimento, conviene verificar el archivo `overall_metrics.csv`.
+| list full + GroupNorm + aggregate mean | 0.702136 |
 
 ## Hallazgos
 
