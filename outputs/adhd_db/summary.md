@@ -24,7 +24,7 @@ $$
 y_s \in \{0,1\}
 $$
 
-En estos experimentos, el modelo usa $C = 24$ canales. Como `pool1 = 8` y `pool2 = 8`, la reducción temporal total es $64$, por lo que:
+En estos experimentos, el modelo usa $C = 19$ canales. Como `pool1 = 8` y `pool2 = 8`, la reducción temporal total es $64$, por lo que:
 
 $$
 T' = \left\lfloor \frac{T}{64} \right\rfloor,
