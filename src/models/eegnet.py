@@ -3,22 +3,6 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-
-def _make_norm2d(norm: str, num_channels: int, max_groups: int = 4) -> nn.Module:
-    if norm == "batch":
-        return nn.BatchNorm2d(num_channels)
-
-    if norm == "group":
-        groups = min(max_groups, num_channels)
-
-        while num_channels % groups != 0:
-            groups -= 1
-
-        return nn.GroupNorm(groups, num_channels)
-
-    raise ValueError(f"Unknown norm: {norm}")
-
-
 class EEGNet(nn.Module):
     """EEGNet baseline.
 
@@ -267,6 +251,20 @@ class EEGNet(nn.Module):
         max_logits = logits_time.max(dim=1).values
 
         return (1.0 - alpha) * mean_logits + alpha * max_logits
+
+def _make_norm2d(norm: str, num_channels: int, max_groups: int = 4) -> nn.Module:
+    if norm == "batch":
+        return nn.BatchNorm2d(num_channels)
+
+    if norm == "group":
+        groups = min(max_groups, num_channels)
+
+        while num_channels % groups != 0:
+            groups -= 1
+
+        return nn.GroupNorm(groups, num_channels)
+
+    raise ValueError(f"Unknown norm: {norm}")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,19 @@
+""" Chronic Neuropathic Pain: EEG data in eyes open (5 min) and eyes closed (5 min) with questionnaire reports
+
+
+
+url: https://data.mendeley.com/datasets/yj52xrfgtz/4
+"""
+
 from __future__ import annotations
 
+import os
+import argparse
 from pathlib import Path
 from collections import Counter
 
 import mne
 import numpy as np
-import pandas as pd
 import torch
 
 from sklearn.model_selection import StratifiedGroupKFold
@@ -27,16 +35,6 @@ EYES_SPLIT_SEC = 300.0
 
 
 class EEGDataset(Dataset):
-    """
-    Dataset EEG a nivel de sujeto.
-
-    Cada item es un registro continuo de una condición:
-
-        X_s: (C, T_s)
-        y_s: etiqueta del sujeto
-
-    No se crean épocas, ventanas ni trials.
-    """
 
     def __init__(
         self,

@@ -1,3 +1,10 @@
+""" EEG data for ADHD / Control children
+
+This dataset contains EEG recordings from 121 children, including 63 with ADHD and 58 control subjects. Each recording has 19 channels and a different duration, so the signals vary in length across subjects. The EEGDataset class in this code handles loading, preprocessing, and organizing the data for training machine learning models. The dataset is preprocessed with optional bandpass and notch filtering, resampling, and cropping to a specified duration. The create_dataloaders function implements a nested cross-validation scheme with stratified group splits to ensure that data from the same subject does not leak between training, validation, and test sets.
+
+url: https://ieee-dataport.org/open-access/eeg-data-adhd-control-children
+"""
+
 from __future__ import annotations
 
 import os
@@ -15,8 +22,15 @@ from torch.utils.data import Dataset, DataLoader
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-
 class EEGDataset(Dataset):
+    """
+    Input: .mat files with EEG recordings of children with ADHD and control subjects.
+
+    Output: A dataset of tuples (name, eeg_tensor, label) where:
+        - name: the filename of the .mat file (string)
+        - eeg_tensor: a tensor of shape (C, T) containing the EEG data
+        - label: 0 for control subjects, 1 for ADHD subjects (long tensor)
+    """
     def __init__(
         self,
         adhd_dir: str | Path,
