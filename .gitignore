@@ -37,13 +37,22 @@ tmp/
 
 # --- Project Specific ---
 
-# Ignore all data, models, and outputs by default
+# Ignore all raw/processed data
 data/
-models/
-outputs/
 
-# Exception: DO NOT ignore the summary files inside outputs
+# Outputs: ignore everything except summary.md files
+outputs/**
+!outputs/
+!outputs/**/
 !outputs/**/summary.md
+
+# Models: keep model result folders visible, but ignore heavy artifacts
+models/**/checkpoints/
+models/**/*.pt
+models/**/*.pth
+models/**/*.ckpt
+models/**/*.bin
+models/**/*.onnx
 
 # Ignore specific large file types that might appear anywhere
 *.pt
