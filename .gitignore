@@ -54,6 +54,13 @@ models/**/*.ckpt
 models/**/*.bin
 models/**/*.onnx
 
+
+# Optuna: keep the structure and summary files, but ignore all trial artifacts
+models/hbn_db/optuna/*
+!models/hbn_db/optuna/*/
+!models/hbn_db/optuna/**/*.csv
+!models/hbn_db/optuna/**/*.json
+
 # Ignore specific large file types that might appear anywhere
 *.pt
 *.pth
