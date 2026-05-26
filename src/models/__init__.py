@@ -1,1 +1,0 @@
-from .eegformer import EEGFormer

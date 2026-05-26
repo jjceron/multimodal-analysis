@@ -21,23 +21,33 @@ build/
 # Environment variables
 .env
 
-# Builds / packages
-build/
-dist/
-*.egg-info/
-
 # IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
+# OS generated files
 .DS_Store
 Thumbs.db
 
-outputs/*
-!outputs/**/
-outputs/**/*
-!outputs/adhd_db/summary.md
-!outputs/npain_db/summary.md
+# Logs and temporary files
+*.log
+tmp/
+
+# --- Project Specific ---
+
+# Ignore all data, models, and outputs by default
+data/
+models/
+outputs/
+
+# Exception: DO NOT ignore the summary files inside outputs
+!outputs/**/summary.md
+
+# Ignore specific large file types that might appear anywhere
+*.pt
+*.pth
+*.ckpt
+*.gdf
+*.mat
