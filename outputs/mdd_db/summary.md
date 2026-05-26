@@ -1,4 +1,4 @@
-# Resumen de resultados MDD con EEGNet
+# MDD con EEGNet
 
 ## Entrada de datos y metodología
 
