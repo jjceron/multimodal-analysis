@@ -1,0 +1,2 @@
+experiment,condition,target,test_nrmse_mean,test_nrmse_std,test_rmse_mean,test_rmse_std,test_mae_mean,test_mae_std,test_r2_mean,test_r2_std,best_val_nrmse_mean,best_epoch_mean
+hbn_ec_externalizing_eegnet_optuna,EC,externalizing,1.048567715978354,0.072107132874503,0.7786480238314245,0.09752824703173009,0.6023751023721661,0.05575178119360024,-0.10365380588116704,0.14910819728508795,0.9182038466603295,12.0
