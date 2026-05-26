@@ -1,6 +1,6 @@
 # Resumen de resultados MDD con EEGNet
 
-## 1. Entrada de datos y metodología
+## Entrada de datos y metodología
 
 Se evaluó una tarea de clasificación binaria a partir de EEG de reposo:
 
@@ -53,7 +53,7 @@ En EO se detectó inicialmente un sujeto duplicado representado por dos archivos
 
 ---
 
-## 2. Entrenamiento
+## Entrenamiento
 
 El modelo usado fue `EEGNet` para clasificación binaria sujeto/archivo:
 
@@ -89,14 +89,14 @@ La métrica principal para comparar modelos es `test_balanced_acc_mean`, porque 
 
 ---
 
-## 3. Resultados de las cuatro pruebas
+## Resultados de las cuatro pruebas
 
-| Experimento | Condición | pp_as | Norm real | Accuracy mean | Balanced Acc mean | F1 macro mean | Test loss mean | Best val BAcc mean |
+| Experimento | Condición | pp_as | Norm real | Accuracy mean | **Balanced Acc mean** | F1 macro mean | Test loss mean | Best val BAcc mean |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `eegnet_ec_tensor_agg_auto_3init` | EC | tensor | BatchNorm | 0.828283 | 0.825556 | 0.806975 | 0.460998 | 0.915000 |
-| `eegnet_eo_tensor_agg_auto_3init` | EO | tensor | BatchNorm | 0.866239 | 0.865714 | 0.861888 | 0.355107 | 0.913333 |
-| `eegnet_ec_list_agg_auto_3init` | EC | list | GroupNorm | 0.701515 | 0.697778 | 0.677637 | 0.611843 | 0.845000 |
-| `eegnet_eo_list_agg_auto_3init` | EO | list | GroupNorm | 0.838462 | 0.833333 | 0.834241 | 0.476328 | 0.933333 |
+| `eegnet_ec_tensor_agg_auto_3init` | EC | tensor | BatchNorm | 0.828283 | **0.825556** | 0.806975 | 0.460998 | 0.915000 |
+| `eegnet_eo_tensor_agg_auto_3init` | EO | tensor | BatchNorm | 0.866239 | **0.865714** | 0.861888 | 0.355107 | 0.913333 |
+| `eegnet_ec_list_agg_auto_3init` | EC | list | GroupNorm | 0.701515 | **0.697778** | 0.677637 | 0.611843 | 0.845000 |
+| `eegnet_eo_list_agg_auto_3init` | EO | list | GroupNorm | 0.838462 | **0.833333** | 0.834241 | 0.476328 | 0.933333 |
 
 ### Comparación principal
 
