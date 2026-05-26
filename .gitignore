@@ -35,65 +35,18 @@ Thumbs.db
 *.log
 tmp/
 
-# =========================
-# Project Specific
-# =========================
+# --- Project Specific ---
 
-# Raw / processed data and caches
+# Ignore all raw/processed data
 data/
 
-# Large EEG/data formats anywhere
-*.edf
-*.bdf
-*.gdf
-*.mat
-*.set
-*.fdt
-*.zip
-*.rar
-*.7z
-
-# =========================
-# Outputs
-# Ignore everything by default
-# =========================
+# Outputs: ignore everything except summary.md files
 outputs/**
 !outputs/
 !outputs/**/
-
-# Allow only lightweight final/report files
 !outputs/**/summary.md
-!outputs/**/config.json
-!outputs/**/best_params.json
-!outputs/**/best_summary.json
-!outputs/**/fold_metrics.csv
-!outputs/**/overall_metrics.csv
-!outputs/**/predictions.csv
 
-# Optional lightweight final figures
-!outputs/**/plots/
-!outputs/**/plots/confusion_matrix_global.png
-
-# Keep Optuna/intermediate/heavy artifacts ignored
-outputs/**/checkpoints/
-outputs/**/study.sqlite
-outputs/**/study.sqlite3
-outputs/**/*.sqlite
-outputs/**/*.sqlite3
-outputs/**/trial_fold_metrics_partial.csv
-outputs/**/optuna_trials.csv
-
-# Model weights / heavy artifacts inside outputs
-outputs/**/*.pt
-outputs/**/*.pth
-outputs/**/*.ckpt
-outputs/**/*.bin
-outputs/**/*.onnx
-
-# =========================
-# Models
-# Keep model result folders visible, ignore heavy artifacts
-# =========================
+# Models: keep model result folders visible, but ignore heavy artifacts
 models/**/checkpoints/
 models/**/*.pt
 models/**/*.pth
@@ -101,9 +54,9 @@ models/**/*.ckpt
 models/**/*.bin
 models/**/*.onnx
 
-# Large model artifacts anywhere
+# Ignore specific large file types that might appear anywhere
 *.pt
 *.pth
 *.ckpt
-*.bin
-*.onnx
+*.gdf
+*.mat

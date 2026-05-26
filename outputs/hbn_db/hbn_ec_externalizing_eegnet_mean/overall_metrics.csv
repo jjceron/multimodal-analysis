@@ -1,2 +1,0 @@
-experiment,condition,target,loss,meanmax_alpha,standardize,test_nrmse_mean,test_nrmse_std,test_rmse_mean,test_rmse_std,test_mae_mean,test_mae_std,test_r2_mean,test_r2_std,best_val_nrmse_mean,best_epoch_mean
-hbn_ec_externalizing_eegnet_mean,EC,externalizing,mse,0.0,True,0.986662208686867,0.04624593177682017,0.7395539726479609,0.14952196019099437,0.5709209664527093,0.09500072397319516,0.024786736984428237,0.09122871967076983,0.9703966938415791,19.0
