@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import copy
 import json
-import argparse
 import random
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -16,7 +16,7 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
 from src.datasets.modma_db import MODMADataset, create_dataloaders
 from src.models.eegnet import EEGNet
-from src.utils.visualization import plot_fold_curves, plot_confusion_matrix
+from src.utils.visualization import plot_confusion_matrix, plot_fold_curves
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -68,6 +68,7 @@ def resolve_save_dir(save_dir: str) -> Path:
 
 def save_config(args, save_dir: Path) -> None:
     config = vars(args).copy()
+
     config["save_dir"] = str(save_dir)
     config["project_root"] = str(PROJECT_ROOT)
 
@@ -89,14 +90,6 @@ def to_device(X, y, device):
 
 
 def standardize_eeg(X, eps: float = 1e-6):
-    """Subject-wise, channel-wise standardization.
-
-    Tensor mode:
-        X: Tensor[B, C, T]
-
-    List mode:
-        X: list[Tensor[C, T_i]]
-    """
     if isinstance(X, torch.Tensor):
         mean = X.mean(dim=-1, keepdim=True)
         std = X.std(dim=-1, keepdim=True, unbiased=False).clamp_min(eps)
@@ -114,16 +107,6 @@ def get_class_weights(labels: list[int], n_classes: int, device) -> torch.Tensor
 
 
 def temporal_cross_entropy(logits, y, criterion):
-    """Cross entropy for aggregate=False.
-
-    Tensor mode:
-        logits: Tensor[B, T', L]
-        y:      Tensor[B]
-
-    List mode:
-        logits: list[Tensor[T'_i, L]]
-        y:      Tensor[B]
-    """
     if isinstance(logits, torch.Tensor):
         B, T, L = logits.shape
         y_time = y.unsqueeze(1).expand(B, T)
@@ -154,11 +137,11 @@ def temporal_cross_entropy(logits, y, criterion):
         return losses.mean()
 
     subject_weights = weight[y]
+
     return (losses * subject_weights).sum() / subject_weights.sum().clamp_min(1e-8)
 
 
 def compute_loss(logits, y, aggregate: bool, criterion):
-    """CrossEntropyLoss receives raw logits."""
     if aggregate:
         return criterion(logits, y)
 
@@ -235,6 +218,7 @@ def train_one_epoch(
 
     total_loss = 0.0
     total_n = 0
+
     y_true_all = []
     y_pred_all = []
 
@@ -461,7 +445,7 @@ def train_one_fold(
     checkpoint_path = (
         save_dir
         / "checkpoints"
-        / f"modality-{args.modality}_split-{split_seed}_init-{init_seed}_fold-{fold_id:02d}.pt"
+        / f"task-resting_split-{split_seed}_init-{init_seed}_fold-{fold_id:02d}.pt"
     )
 
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -469,9 +453,7 @@ def train_one_fold(
     torch.save(
         {
             "model_state_dict": best_state,
-            "dataset": "MODMA",
-            "modality": args.modality,
-            "target": "HC=0 vs MDD=1",
+            "task": "Resting-state",
             "pp_as": args.pp_as,
             "aggregate": args.aggregate,
             "standardize": not args.no_standardize,
@@ -516,22 +498,21 @@ def train_one_fold(
         save_dir
         / "plots"
         / "fold_curves"
-        / f"modality-{args.modality}_split-{split_seed}_init-{init_seed}_fold-{fold_id:02d}.png"
+        / f"task-resting_split-{split_seed}_init-{init_seed}_fold-{fold_id:02d}.png"
     )
 
     plot_fold_curves(
         history=history,
         save_path=plot_path,
         title=(
-            f"{save_dir.name} | modality={args.modality} | "
+            f"{save_dir.name} | task=Resting-state | "
             f"split={split_seed} | init={init_seed} | fold={fold_id:02d}"
         ),
     )
 
     metric_row = {
         "experiment": save_dir.name,
-        "dataset": "MODMA",
-        "modality": args.modality,
+        "task": "Resting-state",
         "pp_as": args.pp_as,
         "aggregate": args.aggregate,
         "norm": args.norm,
@@ -557,8 +538,7 @@ def train_one_fold(
         prediction_rows.append(
             {
                 "experiment": save_dir.name,
-                "dataset": "MODMA",
-                "modality": args.modality,
+                "task": "Resting-state",
                 "pp_as": args.pp_as,
                 "aggregate": args.aggregate,
                 "norm": args.norm,
@@ -585,17 +565,17 @@ def inspect_dataset(dataset: MODMADataset) -> None:
         shapes.append(tuple(eeg.shape))
 
     label_count = dict(pd.Series(labels).value_counts().sort_index())
+
     channels = sorted(set(shape[0] for shape in shapes))
     lengths = [shape[1] for shape in shapes]
 
     print("\nDataset inspection:")
-    print("Dataset: MODMA 128-channel resting-state EEG")
-    print(f"Root: {dataset.root}")
-    print(f"EEG dir: {dataset.data_root}")
+    print("Task: Resting-state")
     print(f"Subjects/files: {len(dataset)}")
     print(f"Unique subjects: {len(set(sample['subject'] for sample in dataset.samples))}")
     print(f"Labels: {label_count}")
-    print(f"Channels kept: {dataset.n_channels}")
+    print(f"Channels kept: {len(dataset.channel_names)}")
+    print(f"Channel names: {dataset.channel_names}")
     print("Shapes:")
 
     if len(channels) == 1:
@@ -623,12 +603,7 @@ def print_overall_summary(overall_metrics: pd.DataFrame) -> None:
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--root", type=str, default=str(PROJECT_ROOT / "data/raw/modma_db"))
-    parser.add_argument("--eeg-dir", type=str, default="EEG_128channels_resting_lanzhou_2015")
-    parser.add_argument("--metadata-csv", type=str, default=None)
-    parser.add_argument("--subject-col", type=str, default=None)
-    parser.add_argument("--label-col", type=str, default=None)
-    parser.add_argument("--modality", type=str, default="resting128")
+    parser.add_argument("--root", type=str, default=str(PROJECT_ROOT / "data/raw/modma/MODMA_EEG_BIDS_format"))
 
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--folds", type=int, nargs="+", default=None)
@@ -643,7 +618,7 @@ def parse_args():
     parser.add_argument("--n-rand-init-seeds", type=int, default=RANDOM_SEED_COUNT)
     parser.add_argument("--seed-max", type=int, default=RANDOM_SEED_MAX)
 
-    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -655,12 +630,12 @@ def parse_args():
     parser.add_argument("--lowcut", type=parse_optional_float, default=0.5)
     parser.add_argument("--highcut", type=parse_optional_float, default=60.0)
     parser.add_argument("--notch", type=parse_optional_float, default=50.0)
-    parser.add_argument("--default-fs", type=float, default=250.0)
     parser.add_argument("--target-fs", type=parse_optional_float, default=None)
     parser.add_argument("--duration-sec", type=parse_optional_float, default=None)
-    parser.add_argument("--expected-channels", type=int, default=128)
     parser.add_argument("--pp-as", type=str, default="tensor", choices=["tensor", "list"])
-    parser.add_argument("--channel-strategy", type=str, default="common", choices=["common", "all"])
+    parser.add_argument("--channel-strategy", type=str, default="all", choices=["common", "all"])
+    parser.add_argument("--bad-channel-policy", type=str, default="none", choices=["none", "mark", "drop-subject"])
+    parser.add_argument("--scale-sheet", type=str, default="128-electrodes EEG scale")
 
     parser.add_argument("--F1", type=int, default=8)
     parser.add_argument("--D", type=int, default=2)
@@ -696,7 +671,7 @@ def main():
 
     if args.save_dir is None:
         agg_name = "agg" if args.aggregate else "temporal"
-        args.save_dir = f"modma_db/eegnet_{args.modality}_{args.pp_as}_{agg_name}_{args.norm}"
+        args.save_dir = f"modma/eegnet_resting_{args.pp_as}_{agg_name}_{args.norm}"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     save_dir = resolve_save_dir(args.save_dir)
@@ -706,11 +681,11 @@ def main():
     print(f"\nDevice: {device}")
     print(f"Experiment: {save_dir.name}")
     print(f"Save dir: {save_dir}")
-    print("dataset: MODMA")
-    print(f"modality: {args.modality}")
-    print("target: HC/control=0 vs MDD=1")
+    print("task: Resting-state")
+    print("target: Control=0 vs MDD=1")
     print(f"pp_as: {args.pp_as}")
     print(f"aggregate: {args.aggregate}")
+    print(f"meanmax_alpha: {args.meanmax_alpha}")
     print(f"norm: {args.norm}")
     print(f"standardize: {not args.no_standardize}")
     print(f"class_weights: {not args.no_class_weights}")
@@ -719,19 +694,15 @@ def main():
 
     dataset = MODMADataset(
         root=args.root,
-        eeg_dir=args.eeg_dir,
-        metadata_csv=args.metadata_csv,
-        subject_col=args.subject_col,
-        label_col=args.label_col,
         lowcut=args.lowcut,
         highcut=args.highcut,
         notch=args.notch,
-        default_fs=args.default_fs,
         target_fs=args.target_fs,
         duration_sec=args.duration_sec,
         pp_as=args.pp_as,
         channel_strategy=args.channel_strategy,
-        expected_channels=args.expected_channels,
+        bad_channel_policy=args.bad_channel_policy,
+        scale_sheet=args.scale_sheet,
     )
 
     if args.inspect_shapes:
@@ -745,21 +716,16 @@ def main():
 
     labels = [dataset[i][2].item() for i in range(len(dataset))]
     n_classes = len(set(labels))
-    class_names = ["HC", "MDD"]
+    class_names = ["Control", "MDD"]
 
     print(
-        f"\nDataset: MODMA | modality={args.modality} | "
+        f"\nDataset: task=Resting-state | "
         f"subjects/files={len(dataset)} | "
         f"unique_subjects={len(set(sample['subject'] for sample in dataset.samples))} | "
         f"C={n_channels} | classes={n_classes}"
     )
 
     print(f"Class balance: {dict(pd.Series(labels).value_counts().sort_index())}")
-
-    if n_classes != 2:
-        raise ValueError(
-            f"Expected exactly 2 classes for MDD vs HC, but found {n_classes}: {sorted(set(labels))}"
-        )
 
     all_metric_rows = []
     all_prediction_rows = []
@@ -777,22 +743,27 @@ def main():
         )
 
         selected_folds = args.folds
+
         if selected_folds is None:
             selected_folds = list(range(1, len(folds) + 1))
 
         print(f"\nsplit_seed={split_seed} | folds={selected_folds}")
 
         for init_seed in args.init_seeds:
-            for fold_id, (train_loader, val_loader, test_loader) in enumerate(folds, start=1):
+            for fold_id, (train_loader, val_loader, test_loader) in enumerate(
+                folds,
+                start=1,
+            ):
                 if fold_id not in selected_folds:
                     continue
 
                 print(
                     f"  fold={fold_id:02d} | "
                     f"init_seed={init_seed} | "
-                    f"modality={args.modality} | "
+                    f"task=Resting-state | "
                     f"pp_as={args.pp_as} | "
-                    f"aggregate={args.aggregate}"
+                    f"aggregate={args.aggregate} | "
+                    f"meanmax_alpha={args.meanmax_alpha}"
                 )
 
                 metric_row, prediction_rows = train_one_fold(
@@ -832,8 +803,7 @@ def main():
         .groupby(
             [
                 "experiment",
-                "dataset",
-                "modality",
+                "task",
                 "pp_as",
                 "aggregate",
                 "norm",
