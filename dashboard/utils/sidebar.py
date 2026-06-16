@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import streamlit as st
-from utils.loader import list_experiments
+from utils.loader import list_models, list_versions
 
 
 def render_sidebar() -> None:
@@ -15,27 +15,45 @@ def render_sidebar() -> None:
     )
     st.sidebar.title("Neuro Signals DL")
 
-    experiments = list_experiments()
+    models = list_models()
 
-    if "selected_experiment" not in st.session_state:
-        if experiments:
-            st.session_state.selected_experiment = experiments[-1]
-        else:
-            st.session_state.selected_experiment = None
+    if "selected_model" not in st.session_state:
+        st.session_state.selected_model = models[-1] if models else None
+    if "selected_version" not in st.session_state:
+        st.session_state.selected_version = None
 
-    selected = st.sidebar.selectbox(
-        "Experiment",
-        options=experiments if experiments else ["No experiments"],
-        index=len(experiments) - 1 if experiments else 0,
-        key="experiment_selector",
+    sel_model = st.sidebar.selectbox(
+        "Model",
+        options=models if models else ["No models"],
+        index=len(models) - 1 if models else 0,
+        key="model_selector",
     )
 
-    if selected != st.session_state.selected_experiment:
-        st.session_state.selected_experiment = selected
+    versions = list_versions(sel_model) if sel_model and sel_model != "No models" else []
+    sel_version = st.sidebar.selectbox(
+        "Version",
+        options=versions if versions else ["No versions"],
+        index=len(versions) - 1 if versions else 0,
+        key="version_selector",
+    )
+
+    changed = (
+        sel_model != st.session_state.selected_model
+        or sel_version != st.session_state.selected_version
+    )
+
+    if sel_model and sel_model != "No models":
+        st.session_state.selected_model = sel_model
+    if sel_version and sel_version != "No versions":
+        st.session_state.selected_version = sel_version
+
+    if changed:
         st.cache_data.clear()
         st.rerun()
 
-    st.sidebar.success(f"**{len(experiments)}** experiments available")
+    n_models = len(models)
+    n_versions = sum(len(list_versions(m)) for m in models)
+    st.sidebar.success(f"**{n_models} models / {n_versions} versions**")
     st.sidebar.markdown("---")
 
     st.sidebar.page_link("app.py", label="Overview", icon="🏠")

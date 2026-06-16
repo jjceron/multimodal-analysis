@@ -1,28 +1,23 @@
+from __future__ import annotations
+
 import streamlit as st
-import pandas as pd
-from utils.loader import list_experiments, load_predictions, load_config
+from utils.loader import load_config, load_predictions
 from utils.plots import plot_dual_confusion_matrix
 from utils.sidebar import render_sidebar
 
 st.set_page_config(page_title="Predictions", page_icon="🎯", layout="wide")
 render_sidebar()
 
-st.title("🎯 Predictions Analysis")
+st.title("Predictions Analysis")
 
-experiments = list_experiments()
+sel_m = st.session_state.get("selected_model")
+sel_v = st.session_state.get("selected_version")
 
-if not experiments:
-    st.warning("No experiments found.")
+if not sel_m or not sel_v:
+    st.warning("Select a model and version from the sidebar.")
     st.stop()
 
-selected = st.selectbox(
-    "Experiment",
-    options=experiments,
-    index=len(experiments) - 1,
-    key="pred_exp_selector",
-)
-
-df_pred = load_predictions(selected)
+df_pred = load_predictions(sel_m, sel_v)
 
 if df_pred.empty:
     st.warning("No predictions available.")

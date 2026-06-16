@@ -71,6 +71,10 @@ def parse_args():
     parser.add_argument("--pin-memory", action="store_true")
 
     parser.add_argument("--run-name", type=str, default=None)
+    parser.add_argument("--model-name", type=str, default="EEGNet",
+                        help="Model architecture name (used for directory structure)")
+    parser.add_argument("--version-name", type=str, default=None,
+                        help="Version/tag for this run (e.g., Baseline, Exp1)")
 
     return parser.parse_args()
 
@@ -182,13 +186,10 @@ def build_model(args, n_channels: int, n_classes: int) -> EEGNet:
     )
 
 
-def build_out_dir(run_name: str | None) -> Path:
-    if run_name:
-        out_dir = OUTPUT_ROOT / run_name
-    else:
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        out_dir = OUTPUT_ROOT / f"eegnet_baseline_{stamp}"
-
+def build_out_dir(args) -> Path:
+    model_name = args.model_name or "Unknown"
+    version = args.version_name or args.run_name or time.strftime("%Y%m%d_%H%M%S")
+    out_dir = OUTPUT_ROOT / model_name / version
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
 
@@ -238,7 +239,7 @@ def main():
         pin_memory=args.pin_memory and torch.cuda.is_available(),
     )
 
-    out_dir = build_out_dir(args.run_name)
+    out_dir = build_out_dir(args)
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
