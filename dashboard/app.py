@@ -4,206 +4,80 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
-import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.models import EEGNet
-from utils.loader import (
-    load_all_experiments_summary,
-    load_config,
-    load_fold_metrics,
-    list_models,
-    list_versions,
-)
-from utils.plots import plot_metrics_comparison, plot_fold_bars
+from utils.loader import load_all_experiments_summary
+from utils.plots import plot_metrics_comparison
 from utils.sidebar import render_sidebar
 
 st.set_page_config(
     page_title="EEG Analysis Dashboard",
-    page_icon="🧠",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 render_sidebar()
 
-tab_overview, tab_arch = st.tabs(["Overview", "Architecture"])
+st.title("EEG Analysis Overview")
+st.markdown("EEGNet baselines on **MODMA** dataset — 5-fold cross-validation")
 
-with tab_overview:
-    st.title("EEG Analysis")
-    st.markdown("#### EEGNet baselines on MODMA dataset — 5-fold cross-validation")
+df_summary = load_all_experiments_summary()
 
-    df_summary = load_all_experiments_summary()
+if df_summary.empty:
+    st.warning("No experiments found. Run a benchmark first.")
+    st.stop()
 
-    if df_summary.empty:
-        st.warning("No experiments found. Run a benchmark first.")
-        st.stop()
+col1, col2, col3, col4 = st.columns(4)
 
-    col1, col2, col3, col4 = st.columns(4)
+best_acc = df_summary.loc[df_summary["accuracy"].idxmax()] if "accuracy" in df_summary.columns else None
+best_f1 = df_summary.loc[df_summary["f1_macro"].idxmax()] if "f1_macro" in df_summary.columns else None
 
-    best_acc = df_summary.loc[df_summary["accuracy"].idxmax()] if "accuracy" in df_summary.columns else None
-    best_f1 = df_summary.loc[df_summary["f1_macro"].idxmax()] if "f1_macro" in df_summary.columns else None
+col1.metric("Experiments", len(df_summary))
+col2.metric(
+    "Best Accuracy",
+    f"{best_acc['accuracy']:.2%}" if best_acc is not None else "—",
+    delta=f"±{best_acc['accuracy_std']:.2%}" if best_acc is not None else None,
+)
+col3.metric(
+    "Best Balanced Acc",
+    f"{best_acc['balanced_accuracy']:.2%}" if best_acc is not None else "—",
+    delta=f"±{best_acc['balanced_accuracy_std']:.2%}" if best_acc is not None else None,
+)
+col4.metric(
+    "Best F1-macro",
+    f"{best_f1['f1_macro']:.4f}" if best_f1 is not None else "—",
+    delta=f"±{best_f1['f1_macro_std']:.4f}" if best_f1 is not None else None,
+)
 
-    col1.metric("Experiments", len(df_summary))
-    col2.metric(
-        "Best Accuracy",
-        f"{best_acc['accuracy']:.2%}" if best_acc is not None else "—",
-        delta=f"±{best_acc['accuracy_std']:.2%}" if best_acc is not None else None,
+st.markdown("---")
+
+fig = plot_metrics_comparison(df_summary)
+st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("---")
+st.subheader("All Experiments")
+
+cols = ["experiment", "model", "version", "accuracy", "balanced_accuracy", "f1_macro",
+        "model_params", "duration_sec", "batch_size", "weight_decay", "lr_scheduler"]
+display_cols = [c for c in cols if c in df_summary.columns]
+df_display = df_summary[display_cols].copy()
+
+for c in ["accuracy", "balanced_accuracy"]:
+    if c in df_display.columns:
+        df_display[c] = df_display[c].apply(lambda x: f"{x:.2%}" if pd.notna(x) else "—")
+if "f1_macro" in df_display.columns:
+    df_display["f1_macro"] = df_display["f1_macro"].apply(
+        lambda x: f"{x:.4f}" if pd.notna(x) else "—"
     )
-    col3.metric(
-        "Best Balanced Acc",
-        f"{best_acc['balanced_accuracy']:.2%}" if best_acc is not None else "—",
-        delta=f"±{best_acc['balanced_accuracy_std']:.2%}" if best_acc is not None else None,
-    )
-    col4.metric(
-        "Best F1-macro",
-        f"{best_f1['f1_macro']:.4f}" if best_f1 is not None else "—",
-        delta=f"±{best_f1['f1_macro_std']:.4f}" if best_f1 is not None else None,
-    )
 
-    st.markdown("---")
+st.dataframe(
+    df_display.sort_values("accuracy" if "accuracy" in df_display.columns else "experiment",
+                           ascending=False),
+    use_container_width=True,
+    hide_index=True,
+)
 
-    tab_comparison, tab_table = st.tabs(["Comparison Chart", "All Experiments"])
-
-    with tab_comparison:
-        fig = plot_metrics_comparison(df_summary)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tab_table:
-        cols = ["experiment", "model", "version", "accuracy", "balanced_accuracy", "f1_macro",
-                "model_params", "duration_sec", "batch_size", "weight_decay", "lr_scheduler"]
-        display_cols = [c for c in cols if c in df_summary.columns]
-        df_display = df_summary[display_cols].copy()
-
-        for c in ["accuracy", "balanced_accuracy"]:
-            if c in df_display.columns:
-                df_display[c] = df_display[c].apply(lambda x: f"{x:.2%}" if pd.notna(x) else "—")
-        if "f1_macro" in df_display.columns:
-            df_display["f1_macro"] = df_display["f1_macro"].apply(
-                lambda x: f"{x:.4f}" if pd.notna(x) else "—"
-            )
-
-        st.dataframe(
-            df_display.sort_values("accuracy" if "accuracy" in df_display.columns else "experiment",
-                                   ascending=False),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    st.markdown("---")
-    st.subheader("Per-Experiment Fold Details")
-
-    sel_m = st.session_state.get("selected_model")
-    sel_v = st.session_state.get("selected_version")
-
-    if sel_m and sel_v:
-        df_folds = load_fold_metrics(sel_m, sel_v)
-        if not df_folds.empty:
-            col_left, col_right = st.columns(2)
-            with col_left:
-                metric_choice = st.selectbox(
-                    "Metric",
-                    options=[c for c in df_folds.columns if c not in ("fold", "best_epoch", "n_epochs")],
-                    index=0,
-                )
-                fig = plot_fold_bars(df_folds, metric=metric_choice)
-                st.plotly_chart(fig, use_container_width=True)
-            with col_right:
-                st.dataframe(df_folds, use_container_width=True, hide_index=True)
-
-    st.caption("Data from `outputs/models/modma_db/` — Generated by benchmark_modma.py")
-
-with tab_arch:
-    sel_m = st.session_state.get("selected_model")
-    sel_v = st.session_state.get("selected_version")
-
-    if not sel_m or not sel_v:
-        st.info("Select a model and version from the sidebar.")
-        st.stop()
-
-    cfg = load_config(sel_m, sel_v)
-    if not cfg:
-        st.info(f"No configuration found for {sel_m}/{sel_v}")
-        st.stop()
-
-    F1 = cfg.get("F1", 8)
-    D = cfg.get("D", 2)
-    F2 = cfg.get("F2", 16)
-    n_channels = cfg.get("n_channels", 128)
-    n_classes = cfg.get("n_classes", 2)
-    dropout = cfg.get("dropout", 0.5)
-    meanmax_alpha = cfg.get("meanmax_alpha", 0.5)
-    duration_sec = cfg.get("duration_sec", 120.0)
-    fs = cfg.get("target_fs", None) or 250
-    T = int(duration_sec * fs)
-
-    try:
-        model = EEGNet(
-            n_channels=n_channels, n_classes=n_classes,
-            F1=F1, D=D, F2=F2,
-            dropout=dropout, meanmax_alpha=meanmax_alpha,
-            aggregate=True,
-        )
-    except Exception:
-        st.info(f"Cannot build model architecture for {sel_m}")
-        st.stop()
-
-    T_pool1 = T // cfg.get("pool1", 8)
-    T_total = T_pool1 // cfg.get("pool2", 8)
-
-    col_flow, col_stats = st.columns([3, 2], gap="large")
-
-    with col_flow:
-        blocks = [
-            {"name": "Input", "layers": f"Shape: (B, {n_channels}, {T})", "color": "#636efa", "shape": f"(B, {n_channels}, {T})"},
-            {"name": "Temporal", "layers": f"Conv2d(1→{F1}, (1,63))\nBatchNorm2d({F1})", "color": "#00cc96", "shape": f"(B, {F1}, {n_channels}, {T})"},
-            {"name": "Spatial", "layers": f"DepthConv({F1}→{F1*D}, ({n_channels},1))\nBN+ELU+AvgPool+Drop", "color": "#ef553b", "shape": f"(B, {F1*D}, 1, {T_pool1})"},
-            {"name": "Separable", "layers": f"SepConv({F1*D}→{F2})\nBN+ELU+AvgPool+Drop", "color": "#ab63fa", "shape": f"(B, {F2}, 1, {T_total})"},
-            {"name": "Classifier", "layers": f"Conv2d({F2}→{n_classes}, (1,1))", "color": "#ffa15a", "shape": f"(B, {T_total}, {n_classes})"},
-            {"name": "Aggregation", "layers": f"Mean-Max (α={meanmax_alpha})", "color": "#19d3f3", "shape": f"(B, {n_classes})"},
-        ]
-
-        fig = go.Figure()
-        fig.update_layout(
-            title=dict(text=f"<b>EEGNet</b> F1={F1} D={D} F2={F2}", font=dict(size=14)),
-            showlegend=False, xaxis=dict(visible=False, range=[-1, 1]),
-            yaxis=dict(visible=False, range=[-1, 6.5]), height=420,
-            margin=dict(l=20, r=20, t=40, b=20),
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        )
-        y_spacing, start_y, box_w, box_h = 1.0, 6.0, 1.2, 0.55
-        for i, block in enumerate(blocks):
-            yc = start_y - i * y_spacing
-            fig.add_shape(type="rect", x0=-box_w/2, x1=box_w/2, y0=yc-box_h/2, y1=yc+box_h/2,
-                          line=dict(color=block["color"], width=2), fillcolor=block["color"], opacity=0.15)
-            fig.add_annotation(x=-box_w/2-0.05, y=yc, xanchor="right", text=f"<b>{block['name']}</b>",
-                               font=dict(size=11, color=block["color"]), showarrow=False)
-            fig.add_annotation(x=box_w/2+0.05, y=yc, xanchor="left",
-                               text=block["layers"].replace("\n", "<br>"),
-                               font=dict(size=9, color="#888"), showarrow=False)
-            fig.add_annotation(x=0, y=yc-box_h/2-0.12, text=block["shape"],
-                               font=dict(size=8, color="#aaa"), showarrow=False)
-            if i < len(blocks) - 1:
-                yn = start_y - (i+1) * y_spacing
-                fig.add_annotation(x=0, y=(yc-box_h/2 + yn+box_h/2)/2, ax=0, ay=yc-box_h/2,
-                                   axref="x", ayref="y", xref="x", yref="y",
-                                   showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=1.5, arrowcolor="#555")
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col_stats:
-        total_p = sum(p.numel() for p in model.parameters())
-        train_p = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        st.subheader("Parameters")
-        st.markdown(f"**Total:** {total_p:,}")
-        st.markdown(f"**Trainable:** {train_p:,} ({train_p/total_p*100:.1f}%)")
-        st.markdown(f"**Non-trainable:** {total_p - train_p:,}")
-        st.subheader("Hyperparameters")
-        st.json({
-            "F1": F1, "D": D, "F2": F2,
-            "Dropout": dropout, "α": meanmax_alpha,
-            "Duration": f"{duration_sec}s @ {fs}Hz",
-            "Channels": n_channels, "Classes": n_classes,
-        }, expanded=True)
+st.caption("Data from `outputs/models/modma_db/` — Generated by benchmark_modma.py")
