@@ -31,7 +31,7 @@ if df_summary.empty:
     st.warning("No experiments found. Run a benchmark first.")
     st.stop()
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 
 best_acc = (df_summary.loc[df_summary["test_accuracy"].idxmax(skipna=True)]
             if "test_accuracy" in df_summary.columns and df_summary["test_accuracy"].notna().any()
@@ -40,18 +40,17 @@ best_f1 = (df_summary.loc[df_summary["test_f1_macro"].idxmax(skipna=True)]
            if "test_f1_macro" in df_summary.columns and df_summary["test_f1_macro"].notna().any()
            else None)
 
-col1.metric("Experiments", len(df_summary))
-col2.metric(
+col1.metric(
     "Best Accuracy (test)",
     f"{best_acc['test_accuracy']:.2%}" if best_acc is not None else "—",
     delta=f"±{best_acc['test_accuracy_std']:.2%}" if best_acc is not None else None,
 )
-col3.metric(
+col2.metric(
     "Best Balanced Acc (test)",
     f"{best_acc['test_balanced_accuracy']:.2%}" if best_acc is not None else "—",
     delta=f"±{best_acc['test_balanced_accuracy_std']:.2%}" if best_acc is not None else None,
 )
-col4.metric(
+col3.metric(
     "Best F1-macro (test)",
     f"{best_f1['test_f1_macro']:.4f}" if best_f1 is not None else "—",
     delta=f"±{best_f1['test_f1_macro_std']:.4f}" if best_f1 is not None else None,
