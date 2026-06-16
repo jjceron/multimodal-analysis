@@ -1,20 +1,18 @@
-from __future__ import annotations
-
 import streamlit as st
 from utils.sidebar import render_sidebar
 
-st.set_page_config(page_title="Predictions", page_icon="", layout="wide")
+st.set_page_config(page_title="Predictions", page_icon="🎯", layout="wide")
 render_sidebar()
 
 st.title("Predictions Analysis")
 
-st.markdown("""
-### Future Plans
-
-- **Subject-level predictions** — visualize per-subject classification results (HC vs MDD) across all folds
-- **Confidence calibration** — reliability diagrams showing how well predicted probabilities match true outcomes
-- **Error analysis** — identify subjects or EEG segments most frequently misclassified, with raw signal inspection
-- **Cross-version comparison** — compare predictions from different aggregation strategies side by side
-- **Temporal attention** — highlight which time windows drive decisions (requires saliency/attention mechanisms)
-- **Export reports** — generate PDF summaries of prediction results per model version
-""")
+st.info(
+    "🚧 **Predictions page — coming soon.**\n\n"
+    "This space will show per-subject classification results, including:\n\n"
+    "- **Subject-level predictions** — HC vs MDD across all folds\n"
+    "- **Confidence calibration** — reliability diagrams for predicted probabilities\n"
+    "- **Error analysis** — identify frequently misclassified subjects with raw signal inspection\n"
+    "- **Cross-version comparison** — compare predictions from different aggregation strategies\n"
+    "- **Temporal attention** — time windows driving classification decisions\n\n"
+    "Results will appear here once the prediction pipeline is integrated."
+)

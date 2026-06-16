@@ -30,15 +30,16 @@ st.title("Training")
 
 sel_m = st.session_state.get("selected_model")
 sel_v = st.session_state.get("selected_version")
+ds = st.session_state.get("selected_dataset", "modma_db")
 
 if not sel_m or not sel_v:
     st.warning("Select a model and version from the sidebar.")
     st.stop()
 
-cfg = load_config(sel_m, sel_v)
-df_folds = load_fold_metrics(sel_m, sel_v)
-results = load_results(sel_m, sel_v)
-df_preds = load_predictions(sel_m, sel_v)
+cfg = load_config(ds, sel_m, sel_v)
+df_folds = load_fold_metrics(ds, sel_m, sel_v)
+results = load_results(ds, sel_m, sel_v)
+df_preds = load_predictions(ds, sel_m, sel_v)
 
 tab_struct, tab_folds = st.tabs(["Structure", "Folds"])
 
@@ -135,10 +136,13 @@ with tab_struct:
     st.divider()
     st.markdown("##### Model Summary")
 
-    try:
-        shapes: dict = {}
-        hooks = []
+    shapes: dict = {}
+    hooks = []
+    total_p = 0
+    train_p = 0
+    model_mods = {}
 
+    try:
         def make_hook(path: str):
             def hook_fn(m, inp, out):
                 in_shape = tuple(inp[0].shape) if isinstance(inp, (list, tuple)) and inp[0] is not None else ()
@@ -160,75 +164,120 @@ with tab_struct:
 
         total_p = sum(p.numel() for p in model.parameters())
         train_p = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        model_mods = dict(model.named_modules())
 
-        lines = []
-        sep = "=" * 95
+    except Exception as e:
+        st.error(f"Model summary unavailable: {e}")
+
+    tab_int, tab_log = st.tabs(["Interactive", "Log"])
+
+    with tab_int:
+        with st.expander("Input", expanded=False):
+            st.dataframe([{"Module": "Input", "Input Shape": f"(B, {n_ch}, {T})",
+                           "Output Shape": "—", "Params": 0}],
+                         use_container_width=True, hide_index=True)
+
+        with st.expander("Block #1: EEGNet", expanded=False):
+            block_labels = {
+                "temporal_block": "Temporal Block",
+                "spatial_block": "Spatial Block",
+                "separable_block": "Separable Block",
+            }
+            for mod_name, label in block_labels.items():
+                mod_shapes = {k: v for k, v in shapes.items() if k.startswith(mod_name) and k != mod_name}
+                if not mod_shapes:
+                    continue
+                st.markdown(f"**{label}**")
+                rows = []
+                for path, s in sorted(mod_shapes.items()):
+                    m_type = type(model_mods.get(path, None)).__name__
+                    rows.append({"Module": m_type, "Input Shape": str(s["in"]), "Output Shape": str(s["out"]), "Params": s["params"]})
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+
+            s_class = shapes.get("classifier", {}) or shapes.get("classifier.0", {})
+            if s_class:
+                out_shape = s_class.get("out")
+                cls_type = type(model_mods.get("classifier", None)).__name__
+                st.markdown("**Classifier**")
+                st.dataframe([{"Module": cls_type, "Input Shape": str(s_class.get("in", ())),
+                               "Output Shape": str(out_shape), "Params": s_class.get("params", 0)}],
+                             use_container_width=True, hide_index=True)
+
+        with st.expander("Block #2: Aggregation", expanded=False):
+            s_class = shapes.get("classifier", {}) or shapes.get("classifier.0", {})
+            out_shape = s_class.get("out") if s_class else None
+            if s_class and out_shape:
+                B, C, _, T_last = out_shape
+                logits_per_time = (B, T_last, C)
+                st.dataframe([{"Module": "MeanMax", "Input Shape": str(logits_per_time),
+                               "Output Shape": str((B, C)), "Params": 0}],
+                             use_container_width=True, hide_index=True)
+
+        with st.expander("Block #3: Classification Head", expanded=False):
+            s_class = shapes.get("classifier", {}) or shapes.get("classifier.0", {})
+            out_shape = s_class.get("out") if s_class else None
+            if s_class and out_shape:
+                B, C, _, _ = out_shape
+                st.dataframe([{"Module": "Output", "Input Shape": str((B, C)),
+                               "Output Shape": "—", "Params": 0}],
+                             use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        scol1, scol2, scol3 = st.columns(3)
+        scol1.metric("Total parameters", f"{total_p:,}")
+        scol2.metric("Trainable parameters", f"{train_p:,}")
+        scol3.metric("Non-trainable parameters", f"{total_p - train_p:,}")
+
+    with tab_log:
+        BLOCK_WIDTH = 25
+        IN_WIDTH = 32
+        OUT_WIDTH = 32
+        PARAM_WIDTH = 8
+        COL_GAP = 2
+        TOTAL_WIDTH = BLOCK_WIDTH + COL_GAP + IN_WIDTH + COL_GAP + OUT_WIDTH + COL_GAP + PARAM_WIDTH
+        LABEL_WIDTH = BLOCK_WIDTH + COL_GAP + IN_WIDTH + COL_GAP + OUT_WIDTH
+        sep = "=" * TOTAL_WIDTH
+
+        lines = [sep]
+        lines.append(
+            f"{'Module':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{'Input Shape':<{IN_WIDTH}}{'':<{COL_GAP}}{'Output Shape':<{OUT_WIDTH}}{'':<{COL_GAP}}{'Params':<{PARAM_WIDTH}}"
+        )
         lines.append(sep)
-        lines.append(f"{'Module':<35} {'Input Shape':<28} {'Output Shape':<28} {'Params':<8}")
-        lines.append(sep)
 
-        input_shape = f"(1, {n_ch}, {T})"
-        lines.append(f"{'Input':<35} {'—':<28} {input_shape:<28} {'0':<8}")
-        lines.append(f"{'  └── Raw EEG signal':<35} {'—':<28} {input_shape:<28} {'0':<8}")
-        lines.append("")
+        lines.append(
+            f"{'Input':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{f'(B, {n_ch}, {T})':<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
+        )
 
-        parent_map: dict[str, list[str]] = {}
-        all_paths = sorted(shapes.keys(), key=lambda x: (x.count("."), x))
-        for path in all_paths:
-            if "." in path:
-                parent = path.rsplit(".", 1)[0]
-                parent_map.setdefault(parent, []).append(path)
-
-        root_children = parent_map.get(sel_m.lower() if sel_m.lower() in parent_map else "", [])
-        if not root_children:
-            root_children = [p for p in all_paths if "." not in p]
-
-        for path in all_paths:
-            if "." in path or path == sel_m.lower():
-                continue
-            s = shapes.get(path, {})
+        skip_containers = {"temporal_block", "spatial_block", "separable_block", "eegnet"}
+        ordered = [p for p, _ in model.named_modules() if p and p not in skip_containers]
+        for path in ordered:
+            s = shapes.get(path)
             if not s:
                 continue
-            label = path.replace("_", " ").title()
-            lines.append(f"{label:<35} {str(s.get('in', ())):<28} {str(s.get('out', ())):<28} {s.get('params', 0):<8}")
-            children = parent_map.get(path, [])
-            for child in children:
-                cs = shapes.get(child, {})
-                if cs:
-                    child_label = child.split(".")[-1]
-                    child_type = type(dict(model.named_modules()).get(child, nn.Module)).__name__
-                    display = f"{child_label}"
-                    lines.append(
-                        f"  ├── {display:<33} {str(cs.get('in', ())):<28} {str(cs.get('out', ())):<28} {cs.get('params', 0):<8}"
-                    )
-            lines.append("")
+            m_type = type(model_mods.get(path, None)).__name__
+            lines.append(
+                f"{m_type:<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(s['in']):<{IN_WIDTH}}{'':<{COL_GAP}}{str(s['out']):<{OUT_WIDTH}}{'':<{COL_GAP}}{s['params']:<{PARAM_WIDTH}}"
+            )
 
-        classif_shape = shapes.get("classifier", {}).get("out", None)
-        if classif_shape:
-            B, C, _, T_last = classif_shape
+        s_class = shapes.get("classifier", {}) or shapes.get("classifier.0", {})
+        out_shape = s_class.get("out") if s_class else None
+        if s_class and out_shape:
+            B, C, _, T_last = out_shape
             logits_per_time = (B, T_last, C)
-            lines.append(f"{'Logits (per time-step)':<35} {str(classif_shape):<28} {str(logits_per_time):<28} {'0':<8}")
-            lines.append("")
+            lines.append(
+                f"{'MeanMax':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(logits_per_time):<{IN_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
+            )
+            lines.append(
+                f"{'Output':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
+            )
 
-        agg_out = tuple(logits.shape) if logits is not None else None
-        if agg_out:
-            logits_time_shape = tuple(logits_time.shape) if logits_time is not None else None
-            inp = logits_per_time if classif_shape else logits_time_shape
-            lines.append(f"{'Aggregation':<35} {str(inp):<28} {str(agg_out):<28} {'0':<8}")
-            lines.append("")
-            lines.append(f"{'Output':<35} {str(agg_out):<28} {str(agg_out):<28} {'0':<8}")
-
-        lines.append("")
         lines.append(sep)
-        lines.append(f"{'Total parameters':<35} {total_p:<8}")
-        lines.append(f"{'Trainable parameters':<35} {train_p:<8}")
-        lines.append(f"{'Non-trainable parameters':<35} {total_p - train_p:<8}")
+        lines.append(f"{'Total parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{total_p:<{PARAM_WIDTH}}")
+        lines.append(f"{'Trainable parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{train_p:<{PARAM_WIDTH}}")
+        lines.append(f"{'Non-trainable parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{total_p - train_p:<{PARAM_WIDTH}}")
         lines.append(sep)
 
         st.code("\n".join(lines), language="text")
-
-    except Exception as e:
-        st.code(f"Summary unavailable: {e}")
 
 with tab_folds:
     if not results or not results.get("fold_data"):

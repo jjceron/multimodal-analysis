@@ -5,68 +5,85 @@ from pathlib import Path
 
 import pandas as pd
 
-BASE_DIR = Path(__file__).resolve().parents[2] / "outputs" / "models" / "modma_db"
+OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "outputs" / "models"
 
 
-def list_models() -> list[str]:
-    if not BASE_DIR.exists():
+def _base_dir(dataset: str) -> Path:
+    return OUTPUT_ROOT / dataset
+
+
+def list_models(dataset: str = "modma_db") -> list[str]:
+    base = _base_dir(dataset)
+    if not base.exists():
         return []
-    return sorted(d.name for d in BASE_DIR.iterdir() if d.is_dir() and not d.name.startswith("."))
+    return sorted(d.name for d in base.iterdir() if d.is_dir() and not d.name.startswith("."))
 
 
-def list_versions(model: str) -> list[str]:
-    model_dir = BASE_DIR / model
+def list_versions(dataset: str = "modma_db", model: str | None = None) -> list[str]:
+    if not model:
+        return []
+    model_dir = _base_dir(dataset) / model
     if not model_dir.exists():
         return []
     return sorted(d.name for d in model_dir.iterdir() if d.is_dir())
 
 
-def get_experiment_dir(model: str, version: str) -> Path:
-    return BASE_DIR / model / version
+def get_experiment_dir(dataset: str, model: str, version: str) -> Path:
+    return _base_dir(dataset) / model / version
 
 
-def load_config(model: str, version: str) -> dict:
-    path = get_experiment_dir(model, version) / "config.json"
+def load_config(dataset: str = "modma_db", model: str | None = None, version: str | None = None) -> dict:
+    if not model or not version:
+        return {}
+    path = get_experiment_dir(dataset, model, version) / "config.json"
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
-def load_overall_metrics(model: str, version: str) -> dict:
-    path = get_experiment_dir(model, version) / "overall_metrics.csv"
+def load_overall_metrics(dataset: str = "modma_db", model: str | None = None, version: str | None = None) -> dict:
+    if not model or not version:
+        return {}
+    path = get_experiment_dir(dataset, model, version) / "overall_metrics.csv"
     if path.exists():
         df = pd.read_csv(path)
         return df.iloc[0].to_dict()
     return {}
 
 
-def load_fold_metrics(model: str, version: str) -> pd.DataFrame:
-    path = get_experiment_dir(model, version) / "fold_metrics.csv"
+def load_fold_metrics(dataset: str = "modma_db", model: str | None = None, version: str | None = None) -> pd.DataFrame:
+    if not model or not version:
+        return pd.DataFrame()
+    path = get_experiment_dir(dataset, model, version) / "fold_metrics.csv"
     if path.exists():
         return pd.read_csv(path)
     return pd.DataFrame()
 
 
-def load_predictions(model: str, version: str) -> pd.DataFrame:
-    path = get_experiment_dir(model, version) / "predictions.csv"
+def load_predictions(dataset: str = "modma_db", model: str | None = None, version: str | None = None) -> pd.DataFrame:
+    if not model or not version:
+        return pd.DataFrame()
+    path = get_experiment_dir(dataset, model, version) / "predictions.csv"
     if path.exists():
         return pd.read_csv(path)
     return pd.DataFrame()
 
 
-def load_results(model: str, version: str) -> dict:
-    path = get_experiment_dir(model, version) / "results.json"
+def load_results(dataset: str = "modma_db", model: str | None = None, version: str | None = None) -> dict:
+    if not model or not version:
+        return {}
+    path = get_experiment_dir(dataset, model, version) / "results.json"
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
-def load_all_experiments_summary() -> pd.DataFrame:
+def load_all_experiments_summary(dataset: str = "modma_db") -> pd.DataFrame:
     rows = []
-    for model in list_models():
-        for version in list_versions(model):
-            cfg = load_config(model, version)
-            overall = load_overall_metrics(model, version)
+    for model in list_models(dataset):
+        for version in list_versions(dataset, model):
+            cfg = load_config(dataset, model, version)
+            overall = load_overall_metrics(dataset, model, version)
 
             rows.append({
                 "model": model,
