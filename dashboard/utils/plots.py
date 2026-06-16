@@ -137,10 +137,12 @@ def plot_fold_training_curves(
         fig_loss.add_trace(go.Scatter(
             x=mean_epochs, y=mean_loss[:, 0], mode="lines",
             name="Mean (train)", line=dict(color="black", width=3),
+            legendgroup="mean",
         ))
         fig_loss.add_trace(go.Scatter(
             x=mean_epochs, y=mean_loss[:, 1], mode="lines",
             name="Mean (val)", line=dict(color="black", width=3, dash="dash"),
+            legendgroup="mean",
         ))
 
         if has_metric:
@@ -148,10 +150,12 @@ def plot_fold_training_curves(
             fig_metric.add_trace(go.Scatter(
                 x=mean_epochs, y=mean_acc[:, 0], mode="lines",
                 name="Mean (train)", line=dict(color="black", width=3),
+                legendgroup="mean",
             ))
             fig_metric.add_trace(go.Scatter(
                 x=mean_epochs, y=mean_acc[:, 1], mode="lines",
                 name="Mean (val)", line=dict(color="black", width=3, dash="dash"),
+                legendgroup="mean",
             ))
 
     fig_loss.update_layout(
