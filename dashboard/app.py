@@ -33,28 +33,28 @@ if df_summary.empty:
 
 col1, col2, col3, col4 = st.columns(4)
 
-best_acc = (df_summary.loc[df_summary["accuracy"].idxmax(skipna=True)]
-            if "accuracy" in df_summary.columns and df_summary["accuracy"].notna().any()
+best_acc = (df_summary.loc[df_summary["test_accuracy"].idxmax(skipna=True)]
+            if "test_accuracy" in df_summary.columns and df_summary["test_accuracy"].notna().any()
             else None)
-best_f1 = (df_summary.loc[df_summary["f1_macro"].idxmax(skipna=True)]
-           if "f1_macro" in df_summary.columns and df_summary["f1_macro"].notna().any()
+best_f1 = (df_summary.loc[df_summary["test_f1_macro"].idxmax(skipna=True)]
+           if "test_f1_macro" in df_summary.columns and df_summary["test_f1_macro"].notna().any()
            else None)
 
 col1.metric("Experiments", len(df_summary))
 col2.metric(
-    "Best Accuracy",
-    f"{best_acc['accuracy']:.2%}" if best_acc is not None else "—",
-    delta=f"±{best_acc['accuracy_std']:.2%}" if best_acc is not None else None,
+    "Best Accuracy (test)",
+    f"{best_acc['test_accuracy']:.2%}" if best_acc is not None else "—",
+    delta=f"±{best_acc['test_accuracy_std']:.2%}" if best_acc is not None else None,
 )
 col3.metric(
-    "Best Balanced Acc",
-    f"{best_acc['balanced_accuracy']:.2%}" if best_acc is not None else "—",
-    delta=f"±{best_acc['balanced_accuracy_std']:.2%}" if best_acc is not None else None,
+    "Best Balanced Acc (test)",
+    f"{best_acc['test_balanced_accuracy']:.2%}" if best_acc is not None else "—",
+    delta=f"±{best_acc['test_balanced_accuracy_std']:.2%}" if best_acc is not None else None,
 )
 col4.metric(
-    "Best F1-macro",
-    f"{best_f1['f1_macro']:.4f}" if best_f1 is not None else "—",
-    delta=f"±{best_f1['f1_macro_std']:.4f}" if best_f1 is not None else None,
+    "Best F1-macro (test)",
+    f"{best_f1['test_f1_macro']:.4f}" if best_f1 is not None else "—",
+    delta=f"±{best_f1['test_f1_macro_std']:.4f}" if best_f1 is not None else None,
 )
 
 st.markdown("---")
@@ -65,22 +65,32 @@ st.plotly_chart(fig, use_container_width=True)
 st.markdown("---")
 st.subheader("All Experiments")
 
-cols = ["experiment", "model", "version", "accuracy", "balanced_accuracy", "f1_macro",
-        "model_params", "duration_sec", "batch_size", "weight_decay", "lr_scheduler"]
+split = st.radio("Split", ["test", "val"], horizontal=True)
+
+acc_col = f"{split}_accuracy"
+bal_col = f"{split}_balanced_accuracy"
+f1_col = f"{split}_f1_macro"
+
+cols = ["model", "version"]
+for c in [acc_col, bal_col, f1_col]:
+    if c in df_summary.columns:
+        cols.append(c)
+cols += ["duration_sec", "batch_size", "weight_decay", "lr_scheduler"]
+
 display_cols = [c for c in cols if c in df_summary.columns]
 df_display = df_summary[display_cols].copy()
 
-for c in ["accuracy", "balanced_accuracy"]:
+for c in [acc_col, bal_col]:
     if c in df_display.columns:
         df_display[c] = df_display[c].apply(lambda x: f"{x:.2%}" if pd.notna(x) else "—")
-if "f1_macro" in df_display.columns:
-    df_display["f1_macro"] = df_display["f1_macro"].apply(
+if f1_col in df_display.columns:
+    df_display[f1_col] = df_display[f1_col].apply(
         lambda x: f"{x:.4f}" if pd.notna(x) else "—"
     )
 
+sort_col = acc_col if acc_col in df_display.columns else "model"
 st.dataframe(
-    df_display.sort_values("accuracy" if "accuracy" in df_display.columns else "experiment",
-                           ascending=False),
+    df_display.sort_values(sort_col, ascending=False),
     use_container_width=True,
     hide_index=True,
 )

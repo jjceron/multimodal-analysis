@@ -221,25 +221,27 @@ def plot_dual_confusion_matrix(
     return fig
 
 
-def plot_metrics_comparison(df: pd.DataFrame) -> go.Figure:
+def plot_metrics_comparison(df: pd.DataFrame, prefix: str = "test") -> go.Figure:
     fig = go.Figure()
+
+    x_labels = df["model"] + "/" + df["version"]
 
     for metric, color, label in [
         ("accuracy", "#4A90D9", "Accuracy"),
         ("balanced_accuracy", "#2ECC71", "Balanced Acc"),
         ("f1_macro", "#E74C3C", "F1-macro"),
     ]:
-        mean_col = metric
-        std_col = f"{metric}_std"
+        mean_col = f"{prefix}_{metric}"
+        std_col = f"{prefix}_{metric}_std"
 
         if mean_col not in df.columns:
             continue
 
         fig.add_trace(go.Bar(
             name=label,
-            x=df["experiment"],
+            x=x_labels,
             y=df[mean_col],
-            error_y=dict(type="data", array=df[std_col], visible=True),
+            error_y=dict(type="data", array=df[std_col], visible=True) if std_col in df.columns else None,
             marker_color=color,
         ))
 

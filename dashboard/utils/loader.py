@@ -84,18 +84,24 @@ def load_all_experiments_summary(dataset: str = "modma_db") -> pd.DataFrame:
         for version in list_versions(dataset, model):
             cfg = load_config(dataset, model, version)
             overall = load_overall_metrics(dataset, model, version)
+            df_folds = load_fold_metrics(dataset, model, version)
+
+            val_acc = df_folds["val_accuracy"].mean() if "val_accuracy" in df_folds.columns and not df_folds.empty else None
+            val_bal = df_folds["val_balanced_accuracy"].mean() if "val_balanced_accuracy" in df_folds.columns and not df_folds.empty else None
+            val_f1 = df_folds["val_f1_macro"].mean() if "val_f1_macro" in df_folds.columns and not df_folds.empty else None
 
             rows.append({
                 "model": model,
                 "version": version,
-                "experiment": f"{model}/{version}",
-                "accuracy": overall.get("mean_accuracy"),
-                "accuracy_std": overall.get("std_accuracy"),
-                "balanced_accuracy": overall.get("mean_balanced_accuracy"),
-                "balanced_accuracy_std": overall.get("std_balanced_accuracy"),
-                "f1_macro": overall.get("mean_f1_macro"),
-                "f1_macro_std": overall.get("std_f1_macro"),
-                "model_params": f"F1={cfg.get('F1', '?')} D={cfg.get('D', '?')} F2={cfg.get('F2', '?')}",
+                "test_accuracy": overall.get("mean_accuracy"),
+                "test_accuracy_std": overall.get("std_accuracy"),
+                "test_balanced_accuracy": overall.get("mean_balanced_accuracy"),
+                "test_balanced_accuracy_std": overall.get("std_balanced_accuracy"),
+                "test_f1_macro": overall.get("mean_f1_macro"),
+                "test_f1_macro_std": overall.get("std_f1_macro"),
+                "val_accuracy": val_acc,
+                "val_balanced_accuracy": val_bal,
+                "val_f1_macro": val_f1,
                 "duration_sec": cfg.get("duration_sec", "?"),
                 "batch_size": cfg.get("batch_size", "?"),
                 "weight_decay": cfg.get("weight_decay", 0),
