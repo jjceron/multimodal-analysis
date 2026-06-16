@@ -32,7 +32,7 @@ render_sidebar()
 tab_overview, tab_arch = st.tabs(["Overview", "Architecture"])
 
 with tab_overview:
-    st.title("EEG Multimodal Analysis Dashboard")
+    st.title("EEG Analysis")
     st.markdown("#### EEGNet baselines on MODMA dataset — 5-fold cross-validation")
 
     df_summary = load_all_experiments_summary()

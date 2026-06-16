@@ -78,6 +78,98 @@ def plot_training_curves(
     return fig
 
 
+def plot_fold_training_curves(
+    fold_data: list[dict],
+    metric_name: str = "Accuracy",
+) -> tuple[go.Figure, go.Figure]:
+    colors = px.colors.qualitative.Plotly
+    n_folds = len(fold_data)
+
+    fig_loss = go.Figure()
+    fig_metric = go.Figure()
+    has_metric = any(fd.get("train_accs") and len(fd["train_accs"]) > 0 for fd in fold_data)
+
+    max_len = max(len(fd["train_losses"]) for fd in fold_data)
+    loss_sum = np.zeros((max_len, 2))
+    acc_sum = np.zeros((max_len, 2))
+
+    for i, fd in enumerate(fold_data):
+        fold_id = fd.get("fold_id", i)
+        epochs = list(range(1, len(fd["train_losses"]) + 1))
+        clr = colors[i % len(colors)]
+
+        fig_loss.add_trace(go.Scatter(
+            x=epochs, y=fd["train_losses"], mode="lines",
+            name=f"Fold {fold_id} train", line=dict(color=clr, width=1.5),
+            legendgroup=f"fold{fold_id}",
+        ))
+        fig_loss.add_trace(go.Scatter(
+            x=epochs, y=fd["val_losses"], mode="lines",
+            name=f"Fold {fold_id} val", line=dict(color=clr, width=2, dash="dash"),
+            legendgroup=f"fold{fold_id}",
+        ))
+
+        tl = np.array(fd["train_losses"])
+        vl = np.array(fd["val_losses"])
+        loss_sum[:len(tl), 0] += tl
+        loss_sum[:len(vl), 1] += vl
+
+        if has_metric and fd.get("train_accs") and fd.get("val_accs"):
+            fig_metric.add_trace(go.Scatter(
+                x=epochs, y=fd["train_accs"], mode="lines",
+                name=f"Fold {fold_id} train", line=dict(color=clr, width=1.5),
+                legendgroup=f"fold{fold_id}",
+            ))
+            fig_metric.add_trace(go.Scatter(
+                x=epochs, y=fd["val_accs"], mode="lines",
+                name=f"Fold {fold_id} val", line=dict(color=clr, width=2, dash="dash"),
+                legendgroup=f"fold{fold_id}",
+            ))
+            ta = np.array(fd["train_accs"])
+            va = np.array(fd["val_accs"])
+            acc_sum[:len(ta), 0] += ta
+            acc_sum[:len(va), 1] += va
+
+    if n_folds > 1:
+        mean_loss = loss_sum / n_folds
+        mean_epochs = list(range(1, max_len + 1))
+
+        fig_loss.add_trace(go.Scatter(
+            x=mean_epochs, y=mean_loss[:, 0], mode="lines",
+            name="Mean (train)", line=dict(color="black", width=3),
+        ))
+        fig_loss.add_trace(go.Scatter(
+            x=mean_epochs, y=mean_loss[:, 1], mode="lines",
+            name="Mean (val)", line=dict(color="black", width=3, dash="dash"),
+        ))
+
+        if has_metric:
+            mean_acc = acc_sum / n_folds
+            fig_metric.add_trace(go.Scatter(
+                x=mean_epochs, y=mean_acc[:, 0], mode="lines",
+                name="Mean (train)", line=dict(color="black", width=3),
+            ))
+            fig_metric.add_trace(go.Scatter(
+                x=mean_epochs, y=mean_acc[:, 1], mode="lines",
+                name="Mean (val)", line=dict(color="black", width=3, dash="dash"),
+            ))
+
+    fig_loss.update_layout(
+        title=dict(text="<b>Loss</b>", font=dict(size=14)), height=350,
+        xaxis_title="Epoch", yaxis_title="Loss",
+        margin=dict(l=50, r=50, t=40, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    fig_metric.update_layout(
+        title=dict(text=f"<b>{metric_name}</b>", font=dict(size=14)), height=350,
+        xaxis_title="Epoch", yaxis_title=metric_name,
+        margin=dict(l=50, r=50, t=40, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    return fig_loss, fig_metric
+
+
 def plot_dual_confusion_matrix(
     y_true_val: list[int],
     y_pred_val: list[int],

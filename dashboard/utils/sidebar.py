@@ -13,7 +13,7 @@ def render_sidebar() -> None:
 """,
         unsafe_allow_html=True,
     )
-    st.sidebar.title("MultimodalAnalysis")
+    st.sidebar.title("Neuro Signals DL")
 
     experiments = list_experiments()
 
@@ -39,8 +39,7 @@ def render_sidebar() -> None:
     st.sidebar.markdown("---")
 
     st.sidebar.page_link("app.py", label="Overview", icon="🏠")
-    st.sidebar.page_link("pages/1_experiments.py", label="Experiments", icon="📊")
-    st.sidebar.page_link("pages/2_folds.py", label="Folds", icon="🔬")
+    st.sidebar.page_link("pages/1_experiments.py", label="Training", icon="📊")
     st.sidebar.page_link("pages/3_predictions.py", label="Predictions", icon="🎯")
     st.sidebar.page_link("pages/4_optimization.py", label="Optimization", icon="⚙️")
     st.sidebar.page_link("pages/5_interpretability.py", label="Interpretability", icon="🔍")
