@@ -34,17 +34,17 @@ Thumbs.db
 # Logs and temporary files
 *.log
 tmp/
+.pytest_cache/
 
 # --- Project Specific ---
 
 # Ignore all raw/processed data
 data/
 
-# Outputs: ignore everything except summary.md files
-outputs/**
-!outputs/
-!outputs/**/
-!outputs/**/summary.md
+# Outputs: track benchmark results (json, csv), ignore plots and logs
+outputs/**/plots/
+outputs/**/*.png
+outputs/**/*.log
 
 # Models: keep model result folders visible, but ignore heavy artifacts
 models/**/checkpoints/
