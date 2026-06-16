@@ -251,6 +251,7 @@ def main():
 
     all_fold_metrics: list[dict] = []
     all_predictions: list[dict] = []
+    fold_data_list: list[dict] = []
     overall_val_true: list[int] = []
     overall_val_pred: list[int] = []
     overall_test_true: list[int] = []
@@ -392,6 +393,15 @@ def main():
             metric_name="Accuracy",
         )
 
+        fold_data_list.append({
+            "fold_id": fold_id,
+            "best_epoch": fold_metrics["best_epoch"],
+            "train_losses": train_losses,
+            "val_losses": val_losses,
+            "train_accs": train_accs,
+            "val_accs": val_accs,
+        })
+
     df_fold = pd.DataFrame(all_fold_metrics)
     df_fold.to_csv(out_dir / "fold_metrics.csv", index=False)
 
@@ -424,6 +434,7 @@ def main():
         "config": config,
         "fold_metrics": all_fold_metrics,
         "overall": overall,
+        "fold_data": fold_data_list,
     }
     save_json(out_dir / "results.json", final_report)
 

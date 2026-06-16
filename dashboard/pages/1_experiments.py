@@ -16,7 +16,11 @@ from utils.loader import (
     load_results,
     list_experiments,
 )
-from utils.plots import plot_dual_confusion_matrix, plot_fold_bars
+from utils.plots import (
+    plot_dual_confusion_matrix,
+    plot_fold_bars,
+    plot_training_curves_combined,
+)
 from utils.sidebar import render_sidebar
 
 st.set_page_config(page_title="Experiments", page_icon="📊", layout="wide")
@@ -45,20 +49,6 @@ df_preds = load_predictions(selected)
 tab_all, tab_per, tab_struct = st.tabs(["All Folds", "Per Fold", "Structure"])
 
 with tab_all:
-    if cfg:
-        st.markdown("##### Configuration")
-        cols = st.columns(6)
-        vals = [
-            ("Model", f"F1={cfg.get('F1')} D={cfg.get('D')} F2={cfg.get('F2')}"),
-            ("Duration", f"{cfg.get('duration_sec', '?')}s"),
-            ("Batch", cfg.get("batch_size", "?")),
-            ("Epochs", cfg.get("epochs", "?")),
-            ("Weight Decay", cfg.get("weight_decay", 0)),
-            ("LR Scheduler", "Yes" if cfg.get("lr_scheduler") else "No"),
-        ]
-        for col, (label, value) in zip(cols, vals):
-            col.metric(label, value)
-
     if results:
         overall = results.get("overall", {})
         if overall:
@@ -79,6 +69,18 @@ with tab_all:
                 f"{overall.get('mean_f1_macro', 0):.4f}",
                 delta=f"±{overall.get('std_f1_macro', 0):.4f}",
             )
+
+    exp_data = {}
+    for exp in experiments:
+        r = load_results(exp)
+        fd = r.get("fold_data", [])
+        if fd:
+            exp_data[exp] = {"fold_data": fd}
+
+    if exp_data:
+        st.markdown("##### Training Curves (average across folds)")
+        fig = plot_training_curves_combined(exp_data)
+        st.plotly_chart(fig, use_container_width=True)
 
     if not df_folds.empty:
         st.markdown("##### Fold Comparison")
@@ -129,14 +131,6 @@ with tab_per:
                 fig = plot_dual_confusion_matrix(yt_v, yp_v, yt_t, yp_t)
                 st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("##### Fold Details")
-        st.dataframe(
-            df_folds[df_folds["fold"] == selected_fold],
-            use_container_width=True,
-            hide_index=True,
-            column_config={c: st.column_config.NumberColumn(format="%.4f") for c in df_folds.columns if c not in ("fold",)},
-        )
-
 with tab_struct:
     if not cfg:
         st.info("No configuration available to build the model.")
@@ -156,13 +150,9 @@ with tab_struct:
         @st.cache_resource
         def build_model():
             return EEGNet(
-                n_channels=n_ch,
-                n_classes=n_cls,
-                F1=F1,
-                D=D,
-                F2=F2,
-                dropout=dr,
-                meanmax_alpha=ma,
+                n_channels=n_ch, n_classes=n_cls,
+                F1=F1, D=D, F2=F2,
+                dropout=dr, meanmax_alpha=ma,
                 aggregate=True,
             )
 
@@ -192,21 +182,15 @@ with tab_struct:
             rows = []
             for layer in res.summary_list:
                 if layer.is_leaf_layer:
-                    rows.append(
-                        {
-                            "Layer": layer.class_name,
-                            "Input Shape": str(layer.input_size) if layer.input_size else "",
-                            "Output Shape": str(layer.output_size) if layer.output_size else "",
-                            "Params": layer.num_params,
-                            "Trainable": "Yes" if layer.trainable else "No",
-                        }
-                    )
-            df_layers = pd.DataFrame(rows).drop(columns=["Trainable"], errors="ignore")
+                    rows.append({
+                        "Layer": layer.class_name,
+                        "Input Shape": str(layer.input_size) if layer.input_size else "",
+                        "Output Shape": str(layer.output_size) if layer.output_size else "",
+                        "Params": layer.num_params,
+                    })
             st.dataframe(
-                df_layers,
-                column_config={
-                    "Params": st.column_config.NumberColumn(format="%d"),
-                },
+                pd.DataFrame(rows),
+                column_config={"Params": st.column_config.NumberColumn(format="%d")},
                 use_container_width=True,
                 hide_index=True,
             )

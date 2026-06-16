@@ -163,6 +163,76 @@ def plot_metrics_comparison(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def plot_training_curves_combined(
+    experiments_data: dict[str, dict],
+    metric_name: str = "Accuracy",
+) -> go.Figure:
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=("Loss", metric_name),
+        vertical_spacing=0.12,
+    )
+
+    colors = px.colors.qualitative.Plotly
+
+    for exp_idx, (exp_name, data) in enumerate(experiments_data.items()):
+        fold_data = data.get("fold_data", [])
+        if not fold_data:
+            continue
+
+        max_len = max(len(fd["train_losses"]) for fd in fold_data)
+        train_losses_sum = np.zeros(max_len)
+        val_losses_sum = np.zeros(max_len)
+        train_accs_sum = np.zeros(max_len)
+        val_accs_sum = np.zeros(max_len)
+        n_folds = len(fold_data)
+
+        for fd in fold_data:
+            tl = np.array(fd["train_losses"])
+            vl = np.array(fd["val_losses"])
+            ta = np.array(fd["train_accs"])
+            va = np.array(fd["val_accs"])
+            train_losses_sum[:len(tl)] += tl
+            val_losses_sum[:len(vl)] += vl
+            train_accs_sum[:len(ta)] += ta
+            val_accs_sum[:len(va)] += va
+
+        train_losses_avg = train_losses_sum / n_folds
+        val_losses_avg = val_losses_sum / n_folds
+        train_accs_avg = train_accs_sum / n_folds
+        val_accs_avg = val_accs_sum / n_folds
+        epochs = list(range(1, max_len + 1))
+        color = colors[exp_idx % len(colors)]
+
+        fig.add_trace(go.Scatter(
+            x=epochs, y=train_losses_avg, mode="lines",
+            name=f"{exp_name} (train)", line=dict(color=color, width=2),
+            legendgroup=exp_name,
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=epochs, y=val_losses_avg, mode="lines",
+            name=f"{exp_name} (val)", line=dict(color=color, width=2, dash="dash"),
+            legendgroup=exp_name,
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=epochs, y=train_accs_avg, mode="lines",
+            name=f"{exp_name} (train)", line=dict(color=color, width=2),
+            legendgroup=exp_name, showlegend=False,
+        ), row=2, col=1)
+        fig.add_trace(go.Scatter(
+            x=epochs, y=val_accs_avg, mode="lines",
+            name=f"{exp_name} (val)", line=dict(color=color, width=2, dash="dash"),
+            legendgroup=exp_name, showlegend=False,
+        ), row=2, col=1)
+
+    fig.update_xaxes(title_text="Epoch", row=1, col=1)
+    fig.update_yaxes(title_text="Loss", row=1, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_yaxes(title_text=metric_name, row=2, col=1)
+    fig.update_layout(height=600, margin=dict(l=50, r=50, t=40, b=40))
+    return fig
+
+
 def plot_fold_bars(df: pd.DataFrame, metric: str = "test_accuracy") -> go.Figure:
     df = df.copy()
     df["fold_label"] = df["fold"].apply(lambda x: f"Fold {x}")

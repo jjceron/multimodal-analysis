@@ -43,5 +43,4 @@ def render_sidebar() -> None:
     st.sidebar.page_link("pages/2_folds.py", label="Folds", icon="🔬")
     st.sidebar.page_link("pages/3_predictions.py", label="Predictions", icon="🎯")
     st.sidebar.page_link("pages/4_optimization.py", label="Optimization", icon="⚙️")
-    st.sidebar.page_link("pages/5_latent_space.py", label="Latent Space", icon="🌌")
-    st.sidebar.page_link("pages/6_architecture.py", label="Architecture", icon="🧠")
+    st.sidebar.page_link("pages/5_interpretability.py", label="Interpretability", icon="🔍")
