@@ -65,7 +65,7 @@ st.plotly_chart(fig, use_container_width=True)
 st.markdown("---")
 st.subheader("All Experiments")
 
-split = st.radio("Split", ["test", "val"], horizontal=True)
+split = st.radio("", ["test", "val"], horizontal=True)
 
 acc_col = f"{split}_accuracy"
 bal_col = f"{split}_balanced_accuracy"
