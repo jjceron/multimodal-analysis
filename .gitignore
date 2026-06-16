@@ -46,6 +46,10 @@ outputs/**/plots/
 outputs/**/*.png
 outputs/**/*.log
 
+# Ignore other datasets (only modma_db tracked)
+outputs/models/adhd_db/
+outputs/models/mdd_db/
+
 # Models: keep model result folders visible, but ignore heavy artifacts
 models/**/checkpoints/
 models/**/*.pt
