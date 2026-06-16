@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -165,43 +166,127 @@ with tab_struct:
     st.markdown("##### Model Summary")
 
     try:
-        from torchinfo import summary
+        import torch.nn as nn
 
-        res = summary(
-            model,
-            input_size=(1, n_ch, T),
-            device="cpu",
-            verbose=0,
-            col_names=("input_size", "output_size", "num_params", "trainable"),
-            depth=5,
-        )
+        shapes: dict[str, dict] = {}
+
+        def make_hook(path: str):
+            def hook_fn(m, inp, out):
+                in_shape = tuple(inp[0].shape) if isinstance(inp, (list, tuple)) else ()
+                out_shape = tuple(out.shape) if hasattr(out, "shape") else ()
+                p = sum(p.numel() for p in m.parameters())
+                t = sum(p.numel() for p in m.parameters() if p.requires_grad)
+                shapes[path] = {"in": in_shape, "out": out_shape, "params": p, "trainable": t}
+            return hook_fn
+
+        hooks = []
+        for name, m in model.named_modules():
+            if name:
+                hooks.append(m.register_forward_hook(make_hook(name)))
+
+        dummy = torch.zeros(1, n_ch, T)
+        with torch.no_grad():
+            logits, logits_time = model(dummy)
+
+        for h in hooks:
+            h.remove()
+
+        classif_shape = shapes.get("classifier", {}).get("out", None)
+        if classif_shape:
+            B = classif_shape[0]
+            n_cls_ = classif_shape[1]
+            T_after = classif_shape[3]
+            logits_per_time_shape = (B, T_after, n_cls_)
+        else:
+            logits_per_time_shape = None
+
+        agg_shape = tuple(logits.shape) if logits is not None else None
+        logits_time_shape = tuple(logits_time.shape) if logits_time is not None else None
 
         total_p2 = sum(p.numel() for p in model.parameters())
         train_p2 = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
         lines = []
-        lines.append("=" * 95)
-        lines.append(f"{'Layer (type:depth-idx)':<40} {'Input Shape':<22} {'Output Shape':<22} {'Param #':<10}")
-        lines.append("=" * 95)
+        sep = "─" * 90
+        lines.append(sep)
+        lines.append(f"{'Module':<30} {'Input Shape':<28} {'Output Shape':<28} {'Params':<8} {'Train':<6}")
+        lines.append(sep)
 
-        for layer in res.summary_list:
-            indent = "  " * layer.depth if hasattr(layer, 'depth') else ""
-            prefix = f"{indent}{layer.class_name}"
+        input_shape = f"(1, {n_ch}, {T})"
+        lines.append(f"{'Input':<30} {'—':<28} {input_shape:<28} {'0':<8} {'—':<6}")
+        lines.append("")
 
-            in_str = str(layer.input_size) if layer.input_size and layer.is_leaf_layer else ""
-            out_str = str(layer.output_size) if layer.output_size else ""
-            param_str = str(layer.num_params) if layer.is_leaf_layer else ""
+        for seq_name, seq_label in [("temporal_block", "Temporal Block"),
+                                     ("spatial_block", "Spatial Block"),
+                                     ("separable_block", "Separable Block")]:
+            seq_shape = shapes.get(seq_name, {})
+            seq_in = seq_shape.get("in", ())
+            seq_out = seq_shape.get("out", ())
+            seq_str_in = str(tuple(seq_in)) if seq_in else ""
+            seq_str_out = str(tuple(seq_out)) if seq_out else ""
 
-            if layer.is_leaf_layer:
-                lines.append(f"{prefix:<40} {in_str:<22} {out_str:<22} {param_str:<10}")
-            else:
-                lines.append(f"{prefix:<40}")
+            lines.append(f"  {seq_label}")
+            for child_name, child_m in model._modules[seq_name].named_modules():
+                full_path = f"{seq_name}.{child_name}"
+                if full_path in shapes and child_name:
+                    s = shapes[full_path]
+                    child_label = type(child_m).__name__
+                    p = s.get("params", 0)
+                    t = "Y" if train_p2 > 0 and p > 0 and any(
+                        param.requires_grad for param in child_m.parameters()
+                    ) else ("N" if p == 0 else "Y")
+                    train_str = t
+                    lines.append(
+                        f"    ├── {child_label:<22} "
+                        f"{str(s['in']):<28} {str(s['out']):<28} {p:<8} {train_str:<6}"
+                    )
+            lines.append("")
 
-        lines.append("-" * 95)
-        lines.append(f"{'Total params':<40} {total_p2:<10}")
-        lines.append(f"{'Trainable params':<40} {train_p2:<10}")
-        lines.append(f"{'Non-trainable params':<40} {total_p2 - train_p2:<10}")
-        lines.append("-" * 95)
+        classif_data = shapes.get("classifier", {})
+        if classif_data:
+            lines.append("  Classifier")
+            lines.append(
+                f"    ├── Conv2d{'':<18} "
+                f"{str(classif_data['in']):<28} {str(classif_data['out']):<28} "
+                f"{classif_data['params']:<8} {'Y':<6}"
+            )
+            lines.append("")
+
+        if classif_shape and logits_per_time_shape:
+            B, n_cls_, T_ = logits_per_time_shape
+            lines.append("  Logits (per time-step)")
+            lines.append(
+                f"    ├── Squeeze+Permute{'':<10} "
+                f"{str(classif_data['out']):<28} {str(logits_per_time_shape):<28} "
+                f"{'0':<8} {'N':<6}"
+            )
+            lines.append("")
+
+        if agg_shape:
+            logits_time_input = logits_per_time_shape or logits_time_shape
+            if logits_time_input:
+                lines.append("  Aggregation")
+                lines.append(
+                    f"    ├── Mean-Max α={ma}{'':<12} "
+                    f"{str(logits_time_input):<28} {str(agg_shape):<28} "
+                    f"{'0':<8} {'N':<6}"
+                )
+                lines.append("")
+
+            lines.append("  Output")
+            out_shape_str = str(agg_shape)
+            lines.append(
+                f"    ├── Logits{'':<18} "
+                f"{str(agg_shape):<28} {str(agg_shape):<28} "
+                f"{'0':<8} {'N':<6}"
+            )
+            lines.append("")
+
+        lines.append(sep)
+        lines.append(f"{'Total params':<30} {total_p2:<8}")
+        lines.append(f"{'Trainable params':<30} {train_p2:<8}")
+        lines.append(f"{'Non-trainable params':<30} {total_p2 - train_p2:<8}")
+        lines.append(sep)
 
         st.code("\n".join(lines), language="text")
 
