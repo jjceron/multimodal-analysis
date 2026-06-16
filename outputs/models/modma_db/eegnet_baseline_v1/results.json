@@ -1,0 +1,86 @@
+{
+  "config": {
+    "root": null,
+    "condition": "EC",
+    "k": 5,
+    "inner_splits": 5,
+    "batch_size": 16,
+    "lr": 0.001,
+    "epochs": 100,
+    "patience": 15,
+    "lowcut": 0.5,
+    "highcut": 60.0,
+    "notch": 50.0,
+    "target_fs": null,
+    "duration_sec": 120.0,
+    "F1": 8,
+    "D": 2,
+    "F2": 16,
+    "pool1": 8,
+    "pool2": 8,
+    "dropout": 0.5,
+    "meanmax_alpha": 0.5,
+    "split_seed": 3407,
+    "init_seed": 3001,
+    "num_workers": 0,
+    "pin_memory": false,
+    "run_name": "eegnet_baseline_v1",
+    "device": "cuda",
+    "n_channels": 128,
+    "n_classes": 2,
+    "tensor_shape": [
+      128,
+      30000
+    ]
+  },
+  "fold_metrics": [
+    {
+      "fold": 0,
+      "best_epoch": 22,
+      "n_epochs": 37,
+      "test_accuracy": 0.45454545454545453,
+      "test_balanced_accuracy": 0.4166666666666667,
+      "test_f1_macro": 0.3125
+    },
+    {
+      "fold": 1,
+      "best_epoch": 73,
+      "n_epochs": 88,
+      "test_accuracy": 0.6363636363636364,
+      "test_balanced_accuracy": 0.65,
+      "test_f1_macro": 0.6333333333333333
+    },
+    {
+      "fold": 2,
+      "best_epoch": 1,
+      "n_epochs": 16,
+      "test_accuracy": 0.5,
+      "test_balanced_accuracy": 0.5,
+      "test_f1_macro": 0.3333333333333333
+    },
+    {
+      "fold": 3,
+      "best_epoch": 71,
+      "n_epochs": 86,
+      "test_accuracy": 0.6363636363636364,
+      "test_balanced_accuracy": 0.6,
+      "test_f1_macro": 0.5416666666666666
+    },
+    {
+      "fold": 4,
+      "best_epoch": 40,
+      "n_epochs": 55,
+      "test_accuracy": 0.7,
+      "test_balanced_accuracy": 0.6666666666666667,
+      "test_f1_macro": 0.6703296703296704
+    }
+  ],
+  "overall": {
+    "mean_accuracy": 0.5854545454545453,
+    "std_accuracy": 0.10337287077963511,
+    "mean_balanced_accuracy": 0.5666666666666667,
+    "std_balanced_accuracy": 0.10606601717798214,
+    "mean_f1_macro": 0.4982326007326007,
+    "std_f1_macro": 0.16691651712789604
+  }
+}
