@@ -23,7 +23,7 @@
   "init_seed": 3001,
   "num_workers": 0,
   "pin_memory": false,
-  "run_name": "eegnet_baseline_v1",
+  "run_name": "eegnet_baseline_v2",
   "device": "cuda",
   "n_channels": 128,
   "n_classes": 2,
