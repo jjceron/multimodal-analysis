@@ -15,7 +15,7 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
 from src.datasets.modma_db import MODMADataset, create_dataloaders, DEFAULT_ROOT
 from src.models.eegnet import EEGNet
-from src.utils.plotting import save_fold_figures
+from src.utils.plotting import save_fold_figures, plot_dual_confusion_matrix
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "models" / "modma_db"
@@ -56,6 +56,14 @@ def parse_args():
     parser.add_argument("--pool2", type=int, default=8)
     parser.add_argument("--dropout", type=float, default=0.5)
     parser.add_argument("--meanmax-alpha", type=float, default=0.5)
+
+    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--lr-scheduler", action="store_true",
+                        help="Enable ReduceLROnPlateau scheduler")
+    parser.add_argument("--lr-patience", type=int, default=5,
+                        help="Patience for LR scheduler")
+    parser.add_argument("--lr-factor", type=float, default=0.5,
+                        help="Factor to reduce LR on plateau")
 
     parser.add_argument("--split-seed", type=int, default=3407)
     parser.add_argument("--init-seed", type=int, default=3001)
@@ -109,7 +117,7 @@ def validate(
     loader: torch.utils.data.DataLoader,
     criterion: nn.Module,
     device: torch.device,
-) -> tuple[float, float]:
+) -> tuple[float, float, list[int], list[int]]:
     model.eval()
     total_loss = 0.0
     all_preds, all_labels = [], []
@@ -128,7 +136,7 @@ def validate(
     avg_loss = total_loss / len(loader.dataset)
     acc = accuracy_score(all_labels, all_preds)
 
-    return avg_loss, acc
+    return avg_loss, acc, all_labels, all_preds
 
 
 @torch.no_grad()
@@ -243,6 +251,10 @@ def main():
 
     all_fold_metrics: list[dict] = []
     all_predictions: list[dict] = []
+    overall_val_true: list[int] = []
+    overall_val_pred: list[int] = []
+    overall_test_true: list[int] = []
+    overall_test_pred: list[int] = []
 
     for fold_id, (train_loader, val_loader, test_loader) in enumerate(folds):
         print(f"\n{'='*50}")
@@ -255,28 +267,46 @@ def main():
         model = build_model(args, n_channels=n_channels, n_classes=n_classes)
         model = model.to(device)
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
+        )
         criterion = nn.CrossEntropyLoss()
+
+        scheduler = None
+        if args.lr_scheduler:
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode="min", factor=args.lr_factor,
+                patience=args.lr_patience, min_lr=1e-6,
+            )
 
         best_val_loss = float("inf")
         best_state_dict = None
         patience_counter = 0
+        current_lr = args.lr
 
         train_losses: list[float] = []
         val_losses: list[float] = []
         train_accs: list[float] = []
         val_accs: list[float] = []
+        lr_log: list[float] = []
 
         for epoch in range(1, args.epochs + 1):
             train_loss, train_acc = train_one_epoch(
                 model, train_loader, optimizer, criterion, device,
             )
-            val_loss, val_acc = validate(model, val_loader, criterion, device)
+            val_loss, val_acc, _, _ = validate(
+                model, val_loader, criterion, device,
+            )
 
             train_losses.append(train_loss)
             val_losses.append(val_loss)
             train_accs.append(train_acc)
             val_accs.append(val_acc)
+
+            if scheduler is not None:
+                scheduler.step(val_loss)
+                current_lr = optimizer.param_groups[0]["lr"]
+                lr_log.append(current_lr)
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -286,11 +316,13 @@ def main():
                 patience_counter += 1
 
             if epoch == 1 or epoch % 10 == 0 or patience_counter == 0:
+                lr_str = f" lr={current_lr:.2e}" if scheduler is not None else ""
                 print(
                     f"  Epoch {epoch:3d}/{args.epochs} | "
                     f"Train loss: {train_loss:.4f} acc: {train_acc:.4f} | "
-                    f"Val loss: {val_loss:.4f} acc: {val_acc:.4f} | "
-                    f"Patience: {patience_counter:2d}/{args.patience}"
+                    f"Val loss: {val_loss:.4f} acc: {val_acc:.4f} |"
+                    f"{lr_str}"
+                    f" Patience: {patience_counter:2d}/{args.patience}"
                 )
 
             if patience_counter >= args.patience:
@@ -300,7 +332,8 @@ def main():
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
 
-        y_true, y_pred, test_metrics = evaluate(model, test_loader, device)
+        y_true_val, y_pred_val, _ = evaluate(model, val_loader, device)
+        y_true_test, y_pred_test, test_metrics = evaluate(model, test_loader, device)
 
         print(f"  Test results:")
         for metric_name, value in test_metrics.items():
@@ -310,19 +343,39 @@ def main():
             "fold": fold_id,
             "best_epoch": len(train_losses) - patience_counter,
             "n_epochs": len(train_losses),
+            "val_accuracy": accuracy_score(y_true_val, y_pred_val),
+            "val_balanced_accuracy": balanced_accuracy_score(y_true_val, y_pred_val),
+            "val_f1_macro": f1_score(y_true_val, y_pred_val, average="macro"),
             **{f"test_{k}": v for k, v in test_metrics.items()},
         }
         all_fold_metrics.append(fold_metrics)
 
         for name, true_label, pred_label in zip(
-            test_loader.dataset.names, y_true, y_pred
+            val_loader.dataset.names, y_true_val, y_pred_val
         ):
             all_predictions.append({
                 "fold": fold_id,
+                "split": "val",
                 "subject": name,
                 "true_label": true_label,
                 "pred_label": pred_label,
             })
+
+        for name, true_label, pred_label in zip(
+            test_loader.dataset.names, y_true_test, y_pred_test
+        ):
+            all_predictions.append({
+                "fold": fold_id,
+                "split": "test",
+                "subject": name,
+                "true_label": true_label,
+                "pred_label": pred_label,
+            })
+
+        overall_val_true.extend(y_true_val)
+        overall_val_pred.extend(y_pred_val)
+        overall_test_true.extend(y_true_test)
+        overall_test_pred.extend(y_pred_test)
 
         save_fold_figures(
             fold_id=fold_id,
@@ -330,8 +383,10 @@ def main():
             val_losses=val_losses,
             train_metrics=train_accs,
             val_metrics=val_accs,
-            y_true=y_true,
-            y_pred=y_pred,
+            y_true_val=y_true_val,
+            y_pred_val=y_pred_val,
+            y_true_test=y_true_test,
+            y_pred_test=y_pred_test,
             class_names=class_names,
             output_dir=plots_dir,
             metric_name="Accuracy",
@@ -354,6 +409,16 @@ def main():
 
     df_overall = pd.DataFrame([overall])
     df_overall.to_csv(out_dir / "overall_metrics.csv", index=False)
+
+    plot_dual_confusion_matrix(
+        y_true_val=overall_val_true,
+        y_pred_val=overall_val_pred,
+        y_true_test=overall_test_true,
+        y_pred_test=overall_test_pred,
+        class_names=class_names,
+        save_path=plots_dir / "overall_confusion_matrices.png",
+        show=False,
+    )
 
     final_report = {
         "config": config,
