@@ -14,7 +14,7 @@ import torch.nn as nn
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
 from src.datasets.modma_db import MODMADataset, create_dataloaders, create_windowed_dataloaders, DEFAULT_ROOT
-from src.models.eegnet import EEGNet
+from src.models import EEGNet, EEGFormer
 from src.utils.plotting import save_fold_figures, plot_dual_confusion_matrix
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -71,10 +71,13 @@ def parse_args():
     parser.add_argument("--pin-memory", action="store_true")
 
     parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--model-name", type=str, default="EEGNet",
-                        help="Model architecture name (used for directory structure)")
+    parser.add_argument("--model", type=str, default="eegnet",
+                        choices=["eegnet", "eegformer"],
+                        help="Model architecture")
+    parser.add_argument("--model-name", type=str, default=None,
+                        help="Override directory name (default: capitalized --model)")
     parser.add_argument("--version-name", type=str, default=None,
-                        help="Version/tag for this run (e.g., Baseline, Exp1)")
+                        help="Version/tag for this run (e.g., agg, meanpool)")
 
     parser.add_argument("--window-sec", type=float, default=0.0,
                         help="Window size in seconds (0 = no windowing, use full recording)")
@@ -82,6 +85,51 @@ def parse_args():
                         help="Overlap fraction (0.0 = no overlap, 0.5 = 50%%)")
 
     return parser.parse_args()
+
+
+def auto_adjust_pooling(
+    n_samples: int, pool1: int, pool2: int, model_name: str,
+) -> tuple[int, int]:
+    model_name = model_name.lower()
+    if model_name == "eegnet":
+        target_min, target_max = 30, 500
+    else:
+        target_min, target_max = 20, 300
+
+    p1, p2 = pool1, pool2
+    t_prime = n_samples // p1 // p2
+
+    if t_prime < target_min:
+        while t_prime < target_min and (p1 > 1 or p2 > 1):
+            if p2 >= p1 and p2 > 1:
+                p2 //= 2
+            elif p1 > 1:
+                p1 //= 2
+            else:
+                break
+            t_prime = n_samples // p1 // p2
+        print(f"  [Auto-pool] Reduced pooling: ({pool1},{pool2}) -> ({p1},{p2}), T'={t_prime}")
+    elif t_prime > target_max:
+        while t_prime > target_max:
+            if p1 <= p2 and p1 < 64:
+                p1 *= 2
+            elif p2 < 64:
+                p2 *= 2
+            else:
+                break
+            t_prime = n_samples // p1 // p2
+        print(f"  [Auto-pool] Increased pooling: ({pool1},{pool2}) -> ({p1},{p2}), T'={t_prime}")
+
+    return p1, p2
+
+
+class _ModelAdapter(nn.Module):
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, None]:
+        return self.model(x), None
 
 
 def set_seed(seed: int) -> None:
@@ -217,22 +265,40 @@ def evaluate_subject_level(
     return all_labels, all_preds, metrics, all_subjects
 
 
-def build_model(args, n_channels: int, n_classes: int) -> EEGNet:
-    return EEGNet(
-        n_channels=n_channels,
-        n_classes=n_classes,
-        F1=args.F1,
-        D=args.D,
-        F2=args.F2,
-        pool1=args.pool1,
-        pool2=args.pool2,
-        dropout=args.dropout,
-        meanmax_alpha=args.meanmax_alpha,
+def build_model(args, n_channels: int, n_classes: int) -> nn.Module:
+    sfreq = 250.0
+    if getattr(args, 'window_sec', 0.0) > 0:
+        n_samples = int(round(args.window_sec * sfreq))
+    else:
+        n_samples = int(round(getattr(args, 'duration_sec', 120.0) * sfreq))
+
+    pool1, pool2 = auto_adjust_pooling(
+        n_samples, args.pool1, args.pool2, args.model,
     )
+
+    if args.model.lower() == "eegnet":
+        return EEGNet(
+            n_channels=n_channels,
+            n_classes=n_classes,
+            F1=args.F1, D=args.D, F2=args.F2,
+            pool1=pool1, pool2=pool2,
+            dropout=args.dropout,
+            meanmax_alpha=args.meanmax_alpha,
+        )
+    else:
+        base = EEGFormer(
+            n_channels=n_channels,
+            n_samples=n_samples,
+            num_classes=n_classes,
+            F1=args.F1, D=args.D, F2=args.F2,
+            pool1=pool1, pool2=pool2,
+            dropout_eeg=args.dropout,
+        )
+        return _ModelAdapter(base)
 
 
 def build_out_dir(args) -> Path:
-    model_name = args.model_name or "Unknown"
+    model_name = args.model_name or {"eegnet": "EEGNet", "eegformer": "EEGFormer"}.get(args.model.lower(), args.model.capitalize())
     version = args.version_name or args.run_name or time.strftime("%Y%m%d_%H%M%S")
     out_dir = OUTPUT_ROOT / model_name / version
     out_dir.mkdir(parents=True, exist_ok=True)
