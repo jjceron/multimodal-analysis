@@ -41,6 +41,9 @@ if not sel_m or not sel_v:
     """, icon="📊")
     st.stop()
 
+SKLEARN_NAMES = {"CSPLDA", "RiemannianMDM", "BandPowerSVM"}
+is_sklearn = sel_m in SKLEARN_NAMES
+
 cfg = load_config(ds, sel_m, sel_v)
 df_folds = load_fold_metrics(ds, sel_m, sel_v)
 results = load_results(ds, sel_m, sel_v)
@@ -61,193 +64,220 @@ with tab_struct:
     use_win = win is not None
     T = win["window_samples"] if use_win else int(duration * fs)
 
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-        from src.models import EEGNet
+    if is_sklearn:
+        col_info = st.columns([1])
+        with col_info[0]:
+            st.markdown("##### Model Configuration")
+            st.markdown(f"**Architecture:** {sel_m}")
+            st.markdown(f"**Version:** {sel_v}")
+            if use_win:
+                st.markdown(f"**Input (window):** {n_ch} ch × {T} samples ({win['window_sec']}s)")
+                ov_pct = f"{win['overlap']:.0%}"
+                st.markdown(f"**Windowing:** {win['window_sec']}s windows, "
+                            f"{'no overlap' if win['overlap']==0 else ov_pct + ' overlap'}")
+            else:
+                st.markdown(f"**Input:** {n_ch} ch × {T} samples ({duration}s)")
+            st.markdown(f"**Output:** {n_cls} classes")
 
-        model = EEGNet(
-            n_channels=n_ch, n_classes=n_cls,
-            F1=cfg.get("F1", 8), D=cfg.get("D", 2), F2=cfg.get("F2", 16),
-            dropout=cfg.get("dropout", 0.5), meanmax_alpha=cfg.get("meanmax_alpha", 0.5),
-            aggregate=True,
-        )
-    except Exception:
-        st.info(f"Cannot build model for {sel_m}")
-        st.stop()
+            if results and results.get("overall"):
+                o = results["overall"]
+                st.divider()
+                st.markdown("##### Results")
+                st.markdown(f"**Accuracy:** {o.get('mean_accuracy', 0):.2%} ± {o.get('std_accuracy', 0):.2%}")
+                st.markdown(f"**Balanced Acc:** {o.get('mean_balanced_accuracy', 0):.2%} ± {o.get('std_balanced_accuracy', 0):.2%}")
+                st.markdown(f"**F1-macro:** {o.get('mean_f1_macro', 0):.4f} ± {o.get('std_f1_macro', 0):.4f}")
 
-    col_diag, col_info = st.columns([2, 1], gap="large")
+        st.divider()
+        st.markdown("##### Configuration Parameters")
+        st.json(cfg)
+    else:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+            from src.models import EEGNet
 
-    with col_diag:
-        st.markdown("##### End-to-End Pipeline")
-        pipes = []
-        if use_win:
-            n_win = f"~{int(duration * fs / win['stride'])}/subj"
-            pipes.append(
-                ("Raw EEG", f"{n_ch} ch × {int(duration*fs)} samples\n({duration}s @ {fs}Hz)", "#636efa",
-                 "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
+            model = EEGNet(
+                n_channels=n_ch, n_classes=n_cls,
+                F1=cfg.get("F1", 8), D=cfg.get("D", 2), F2=cfg.get("F2", 16),
+                dropout=cfg.get("dropout", 0.5), meanmax_alpha=cfg.get("meanmax_alpha", 0.5),
+                aggregate=True,
             )
-            pipes.append(
-                ("Windowing", f"{win['window_sec']}s windows\n{win['window_samples']} samples\n{n_win}", "#b6a2d6",
-                 f"→ ({n_ch}, {win['window_samples']})\noverlap {win['overlap']:.0%}"),
+        except Exception:
+            st.info(f"Cannot build model for {sel_m}")
+            st.stop()
+
+        col_diag, col_info = st.columns([2, 1], gap="large")
+
+        with col_diag:
+            st.markdown("##### End-to-End Pipeline")
+            pipes = []
+            if use_win:
+                n_win = f"~{int(duration * fs / win['stride'])}/subj"
+                pipes.append(
+                    ("Raw EEG", f"{n_ch} ch × {int(duration*fs)} samples\n({duration}s @ {fs}Hz)", "#636efa",
+                     "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
+                )
+                pipes.append(
+                    ("Windowing", f"{win['window_sec']}s windows\n{win['window_samples']} samples\n{n_win}", "#b6a2d6",
+                     f"→ ({n_ch}, {win['window_samples']})\noverlap {win['overlap']:.0%}"),
+                )
+            else:
+                pipes.append(
+                    ("Raw EEG", f"{n_ch} ch × {T} samples\n({duration}s @ {fs}Hz)", "#636efa",
+                     "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
+                )
+            pipes += [
+                ("Temporal Conv", f"Conv2d 1 → {cfg.get('F1',8)}\nkernel=(1,63)\nBatchNorm", "#00cc96",
+                 f"→ ({cfg.get('F1',8)}, {n_ch}, {T})"),
+                ("Depthwise Spatial", f"DepthConv {cfg.get('F1',8)} → {cfg.get('F1',8)*cfg.get('D',2)}\n"
+                 f"kernel=({n_ch},1) groups={cfg.get('F1',8)}", "#ef553b",
+                 f"→ ({cfg.get('F1',8)*cfg.get('D',2)}, 1, {T // cfg.get('pool1',8)})\nELU + AvgPool + Dropout"),
+                ("Separable Conv", f"DepthConv → Pointwise\n{cfg.get('F1',8)*cfg.get('D',2)} → {cfg.get('F2',16)}", "#ab63fa",
+                 f"→ ({cfg.get('F2',16)}, 1, {T // cfg.get('pool1',8) // cfg.get('pool2',8)})\nELU + AvgPool + Dropout"),
+                ("Classifier", f"Conv2d {cfg.get('F2',16)} → {n_cls}\nkernel=(1,1)", "#ffa15a",
+                 f"→ logits per time-step"),
+                ("Aggregation", f"Mean-Max Pooling\nα = {cfg.get('meanmax_alpha',0.5)}", "#19d3f3",
+                 f"→ ({n_cls})"),
+                ("Output", f"HC vs MDD\n({n_cls} classes)", "#e6ab02",
+                 f"logits → softmax"),
+            ]
+
+            n_pipes = len(pipes)
+            fig = go.Figure()
+            fig.update_layout(showlegend=False, xaxis=dict(visible=False, range=[-1.5, 1.5]),
+                              yaxis=dict(visible=False, range=[-1, n_pipes - 0.5]),
+                              height=420 + n_pipes * 30,
+                              margin=dict(l=10, r=10, t=10, b=10),
+                              plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+            y_positions = [n_pipes - i - 0.5 for i in range(n_pipes)]
+            for i, (name, inner, color, out) in enumerate(pipes):
+                yc = y_positions[i]
+                bw, bh = 1.4, 0.45
+                fig.add_shape(type="rect", x0=-bw/2, x1=bw/2, y0=yc-bh/2, y1=yc+bh/2,
+                              line=dict(color=color, width=2), fillcolor=color, opacity=0.12)
+                fig.add_annotation(x=-bw/2-0.08, y=yc, xanchor="right", text=f"<b>{name}</b>",
+                                   font=dict(size=11, color=color), showarrow=False)
+                fig.add_annotation(x=0, y=yc, text=inner.replace("\n", "<br>"),
+                                   font=dict(size=9, color="#666"), showarrow=False)
+                fig.add_annotation(x=bw/2+0.08, y=yc, xanchor="left",
+                                   text=f"<span style='color:#999'>{out.replace(chr(10),'<br>')}</span>",
+                                   showarrow=False)
+                if i < len(pipes) - 1:
+                    ny = y_positions[i + 1]
+                    fig.add_annotation(x=0, y=(yc-bh/2 + ny+0.225)/2, ax=0, ay=yc-bh/2,
+                                       axref="x", ayref="y", xref="x", yref="y",
+                                       showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=1.5, arrowcolor="#bbb")
+            st.plotly_chart(fig, use_container_width=True, key="pipeline")
+
+        with col_info:
+            total_p = sum(p.numel() for p in model.parameters())
+            train_p = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            st.markdown("##### Model Info")
+            st.markdown(f"**Architecture:** {sel_m}")
+            st.markdown(f"**Version:** {sel_v}")
+            st.markdown(f"**Parameters:** Total **{total_p:,}** | Trainable **{train_p:,}**")
+            if use_win:
+                st.markdown(f"**Input (window):** {n_ch} ch × {T} samples ({win['window_sec']}s)")
+                ov_pct = f"{win['overlap']:.0%}"
+                st.markdown(f"**Windowing:** {win['window_sec']}s windows, "
+                            f"{'no overlap' if win['overlap']==0 else ov_pct + ' overlap'}")
+            else:
+                st.markdown(f"**Input:** {n_ch} ch × {T} samples ({duration}s)")
+            st.markdown(f"**Output:** {n_cls} classes")
+
+            if results and results.get("overall"):
+                o = results["overall"]
+                st.divider()
+                st.markdown("##### Results")
+                st.markdown(f"**Accuracy:** {o.get('mean_accuracy', 0):.2%} ± {o.get('std_accuracy', 0):.2%}")
+                st.markdown(f"**Balanced Acc:** {o.get('mean_balanced_accuracy', 0):.2%} ± {o.get('std_balanced_accuracy', 0):.2%}")
+                st.markdown(f"**F1-macro:** {o.get('mean_f1_macro', 0):.4f} ± {o.get('std_f1_macro', 0):.4f}")
+
+        st.divider()
+        st.markdown("##### Model Summary")
+
+        shapes: dict = {}
+        hooks = []
+        total_p = 0
+        train_p = 0
+        model_mods = {}
+
+        try:
+            def make_hook(path: str):
+                def hook_fn(m, inp, out):
+                    in_shape = tuple(inp[0].shape) if isinstance(inp, (list, tuple)) and inp[0] is not None else ()
+                    out_shape = tuple(out.shape) if hasattr(out, "shape") else ()
+                    p = sum(p.numel() for p in m.parameters())
+                    shapes[path] = {"in": in_shape, "out": out_shape, "params": p}
+                return hook_fn
+
+            for name, m in model.named_modules():
+                if name:
+                    hooks.append(m.register_forward_hook(make_hook(name)))
+
+            dummy = torch.zeros(1, n_ch, T)
+            with torch.no_grad():
+                logits, logits_time = model(dummy)
+
+            for h in hooks:
+                h.remove()
+
+            total_p = sum(p.numel() for p in model.parameters())
+            train_p = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            model_mods = dict(model.named_modules())
+
+        except Exception as e:
+            st.error(f"Model summary unavailable: {e}")
+
+        BLOCK_WIDTH = 25
+        IN_WIDTH = 32
+        OUT_WIDTH = 32
+        PARAM_WIDTH = 8
+        COL_GAP = 2
+        TOTAL_WIDTH = BLOCK_WIDTH + COL_GAP + IN_WIDTH + COL_GAP + OUT_WIDTH + COL_GAP + PARAM_WIDTH
+        LABEL_WIDTH = BLOCK_WIDTH + COL_GAP + IN_WIDTH + COL_GAP + OUT_WIDTH
+        sep = "=" * TOTAL_WIDTH
+
+        lines = [sep]
+        lines.append(
+            f"{'Module':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{'Input Shape':<{IN_WIDTH}}{'':<{COL_GAP}}{'Output Shape':<{OUT_WIDTH}}{'':<{COL_GAP}}{'Params':<{PARAM_WIDTH}}"
+        )
+        lines.append(sep)
+
+        in_shape_log = f"(windows, {n_ch}, {T})" if use_win else f"(B, {n_ch}, {T})"
+        lines.append(
+            f"{'Input':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{in_shape_log:<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
+        )
+
+        skip_containers = {"temporal_block", "spatial_block", "separable_block", "eegnet"}
+        ordered = [p for p, _ in model.named_modules() if p and p not in skip_containers]
+        for path in ordered:
+            s = shapes.get(path)
+            if not s:
+                continue
+            m_type = type(model_mods.get(path, None)).__name__
+            lines.append(
+                f"{m_type:<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(s['in']):<{IN_WIDTH}}{'':<{COL_GAP}}{str(s['out']):<{OUT_WIDTH}}{'':<{COL_GAP}}{s['params']:<{PARAM_WIDTH}}"
             )
-        else:
-            pipes.append(
-                ("Raw EEG", f"{n_ch} ch × {T} samples\n({duration}s @ {fs}Hz)", "#636efa",
-                 "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
+
+        s_class = shapes.get("classifier", {}) or shapes.get("classifier.0", {})
+        out_shape = s_class.get("out") if s_class else None
+        if s_class and out_shape:
+            B, C, _, T_last = out_shape
+            logits_per_time = (B, T_last, C)
+            lines.append(
+                f"{'MeanMax':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(logits_per_time):<{IN_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
             )
-        pipes += [
-            ("Temporal Conv", f"Conv2d 1 → {cfg.get('F1',8)}\nkernel=(1,63)\nBatchNorm", "#00cc96",
-             f"→ ({cfg.get('F1',8)}, {n_ch}, {T})"),
-            ("Depthwise Spatial", f"DepthConv {cfg.get('F1',8)} → {cfg.get('F1',8)*cfg.get('D',2)}\n"
-             f"kernel=({n_ch},1) groups={cfg.get('F1',8)}", "#ef553b",
-             f"→ ({cfg.get('F1',8)*cfg.get('D',2)}, 1, {T // cfg.get('pool1',8)})\nELU + AvgPool + Dropout"),
-            ("Separable Conv", f"DepthConv → Pointwise\n{cfg.get('F1',8)*cfg.get('D',2)} → {cfg.get('F2',16)}", "#ab63fa",
-             f"→ ({cfg.get('F2',16)}, 1, {T // cfg.get('pool1',8) // cfg.get('pool2',8)})\nELU + AvgPool + Dropout"),
-            ("Classifier", f"Conv2d {cfg.get('F2',16)} → {n_cls}\nkernel=(1,1)", "#ffa15a",
-             f"→ logits per time-step"),
-            ("Aggregation", f"Mean-Max Pooling\nα = {cfg.get('meanmax_alpha',0.5)}", "#19d3f3",
-             f"→ ({n_cls})"),
-            ("Output", f"HC vs MDD\n({n_cls} classes)", "#e6ab02",
-             f"logits → softmax"),
-        ]
+            lines.append(
+                f"{'Output':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
+            )
 
-        n_pipes = len(pipes)
-        fig = go.Figure()
-        fig.update_layout(showlegend=False, xaxis=dict(visible=False, range=[-1.5, 1.5]),
-                          yaxis=dict(visible=False, range=[-1, n_pipes - 0.5]),
-                          height=420 + n_pipes * 30,
-                          margin=dict(l=10, r=10, t=10, b=10),
-                          plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        y_positions = [n_pipes - i - 0.5 for i in range(n_pipes)]
-        for i, (name, inner, color, out) in enumerate(pipes):
-            yc = y_positions[i]
-            bw, bh = 1.4, 0.45
-            fig.add_shape(type="rect", x0=-bw/2, x1=bw/2, y0=yc-bh/2, y1=yc+bh/2,
-                          line=dict(color=color, width=2), fillcolor=color, opacity=0.12)
-            fig.add_annotation(x=-bw/2-0.08, y=yc, xanchor="right", text=f"<b>{name}</b>",
-                               font=dict(size=11, color=color), showarrow=False)
-            fig.add_annotation(x=0, y=yc, text=inner.replace("\n", "<br>"),
-                               font=dict(size=9, color="#666"), showarrow=False)
-            fig.add_annotation(x=bw/2+0.08, y=yc, xanchor="left",
-                               text=f"<span style='color:#999'>{out.replace(chr(10),'<br>')}</span>",
-                               showarrow=False)
-            if i < len(pipes) - 1:
-                ny = y_positions[i + 1]
-                fig.add_annotation(x=0, y=(yc-bh/2 + ny+0.225)/2, ax=0, ay=yc-bh/2,
-                                   axref="x", ayref="y", xref="x", yref="y",
-                                   showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=1.5, arrowcolor="#bbb")
-        st.plotly_chart(fig, use_container_width=True)
+        lines.append(sep)
+        lines.append(f"{'Total parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{total_p:<{PARAM_WIDTH}}")
+        lines.append(f"{'Trainable parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{train_p:<{PARAM_WIDTH}}")
+        lines.append(f"{'Non-trainable parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{total_p - train_p:<{PARAM_WIDTH}}")
+        lines.append(sep)
 
-    with col_info:
-        total_p = sum(p.numel() for p in model.parameters())
-        train_p = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        st.markdown("##### Model Info")
-        st.markdown(f"**Architecture:** {sel_m}")
-        st.markdown(f"**Version:** {sel_v}")
-        st.markdown(f"**Parameters:** Total **{total_p:,}** | Trainable **{train_p:,}**")
-        if use_win:
-            st.markdown(f"**Input (window):** {n_ch} ch × {T} samples ({win['window_sec']}s)")
-            ov_pct = f"{win['overlap']:.0%}"
-            st.markdown(f"**Windowing:** {win['window_sec']}s windows, "
-                        f"{'no overlap' if win['overlap']==0 else ov_pct + ' overlap'}")
-        else:
-            st.markdown(f"**Input:** {n_ch} ch × {T} samples ({duration}s)")
-        st.markdown(f"**Output:** {n_cls} classes")
-
-        if results and results.get("overall"):
-            o = results["overall"]
-            st.divider()
-            st.markdown("##### Results")
-            st.markdown(f"**Accuracy:** {o.get('mean_accuracy', 0):.2%} ± {o.get('std_accuracy', 0):.2%}")
-            st.markdown(f"**Balanced Acc:** {o.get('mean_balanced_accuracy', 0):.2%} ± {o.get('std_balanced_accuracy', 0):.2%}")
-            st.markdown(f"**F1-macro:** {o.get('mean_f1_macro', 0):.4f} ± {o.get('std_f1_macro', 0):.4f}")
-
-    st.divider()
-    st.markdown("##### Model Summary")
-
-    shapes: dict = {}
-    hooks = []
-    total_p = 0
-    train_p = 0
-    model_mods = {}
-
-    try:
-        def make_hook(path: str):
-            def hook_fn(m, inp, out):
-                in_shape = tuple(inp[0].shape) if isinstance(inp, (list, tuple)) and inp[0] is not None else ()
-                out_shape = tuple(out.shape) if hasattr(out, "shape") else ()
-                p = sum(p.numel() for p in m.parameters())
-                shapes[path] = {"in": in_shape, "out": out_shape, "params": p}
-            return hook_fn
-
-        for name, m in model.named_modules():
-            if name:
-                hooks.append(m.register_forward_hook(make_hook(name)))
-
-        dummy = torch.zeros(1, n_ch, T)
-        with torch.no_grad():
-            logits, logits_time = model(dummy)
-
-        for h in hooks:
-            h.remove()
-
-        total_p = sum(p.numel() for p in model.parameters())
-        train_p = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        model_mods = dict(model.named_modules())
-
-    except Exception as e:
-        st.error(f"Model summary unavailable: {e}")
-
-    BLOCK_WIDTH = 25
-    IN_WIDTH = 32
-    OUT_WIDTH = 32
-    PARAM_WIDTH = 8
-    COL_GAP = 2
-    TOTAL_WIDTH = BLOCK_WIDTH + COL_GAP + IN_WIDTH + COL_GAP + OUT_WIDTH + COL_GAP + PARAM_WIDTH
-    LABEL_WIDTH = BLOCK_WIDTH + COL_GAP + IN_WIDTH + COL_GAP + OUT_WIDTH
-    sep = "=" * TOTAL_WIDTH
-
-    lines = [sep]
-    lines.append(
-        f"{'Module':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{'Input Shape':<{IN_WIDTH}}{'':<{COL_GAP}}{'Output Shape':<{OUT_WIDTH}}{'':<{COL_GAP}}{'Params':<{PARAM_WIDTH}}"
-    )
-    lines.append(sep)
-
-    in_shape_log = f"(windows, {n_ch}, {T})" if use_win else f"(B, {n_ch}, {T})"
-    lines.append(
-        f"{'Input':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{in_shape_log:<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
-    )
-
-    skip_containers = {"temporal_block", "spatial_block", "separable_block", "eegnet"}
-    ordered = [p for p, _ in model.named_modules() if p and p not in skip_containers]
-    for path in ordered:
-        s = shapes.get(path)
-        if not s:
-            continue
-        m_type = type(model_mods.get(path, None)).__name__
-        lines.append(
-            f"{m_type:<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(s['in']):<{IN_WIDTH}}{'':<{COL_GAP}}{str(s['out']):<{OUT_WIDTH}}{'':<{COL_GAP}}{s['params']:<{PARAM_WIDTH}}"
-        )
-
-    s_class = shapes.get("classifier", {}) or shapes.get("classifier.0", {})
-    out_shape = s_class.get("out") if s_class else None
-    if s_class and out_shape:
-        B, C, _, T_last = out_shape
-        logits_per_time = (B, T_last, C)
-        lines.append(
-            f"{'MeanMax':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(logits_per_time):<{IN_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
-        )
-        lines.append(
-            f"{'Output':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
-        )
-
-    lines.append(sep)
-    lines.append(f"{'Total parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{total_p:<{PARAM_WIDTH}}")
-    lines.append(f"{'Trainable parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{train_p:<{PARAM_WIDTH}}")
-    lines.append(f"{'Non-trainable parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{total_p - train_p:<{PARAM_WIDTH}}")
-    lines.append(sep)
-
-    st.code("\n".join(lines), language="text")
+        st.code("\n".join(lines), language="text")
 
 with tab_folds:
     if not results or not results.get("fold_data"):
@@ -255,12 +285,13 @@ with tab_folds:
     else:
         fold_data = results["fold_data"]
 
-        st.markdown("##### Training Curves per Fold")
-        fig_loss, fig_acc = plot_fold_training_curves(fold_data)
-        st.plotly_chart(fig_loss, use_container_width=True)
-        st.plotly_chart(fig_acc, use_container_width=True)
+        if not is_sklearn:
+            st.markdown("##### Training Curves per Fold")
+            fig_loss, fig_acc = plot_fold_training_curves(fold_data)
+            st.plotly_chart(fig_loss, use_container_width=True, key="loss_curves")
+            st.plotly_chart(fig_acc, use_container_width=True, key="acc_curves")
+            st.divider()
 
-        st.divider()
         st.markdown("##### Per-Fold Confusion Matrices")
 
         for fd in fold_data:
@@ -274,7 +305,7 @@ with tab_folds:
             if yt_v and yt_t:
                 st.markdown(f"**Fold {fid:02d}**")
                 fig = plot_dual_confusion_matrix(yt_v, yp_v, yt_t, yp_t)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"cm_fold_{fid:02d}")
 
         st.divider()
         st.markdown("##### Summary")
@@ -323,4 +354,4 @@ with tab_folds:
                 if yt_v_all and yt_t_all:
                     fig = plot_dual_confusion_matrix(yt_v_all, yp_v_all, yt_t_all, yp_t_all)
                     fig.update_layout(height=400)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key="global_cm")

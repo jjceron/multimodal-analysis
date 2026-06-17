@@ -378,6 +378,13 @@ def main():
         print(f"Windowing: {args.window_sec}s windows ({window_samples} samples), "
               f"stride={stride}, overlap={args.overlap:.0%}")
 
+    HEAVY_MODELS = {"eegconformer", "cnn_lstm", "shallowconvnet"}
+    if args.model.lower() in HEAVY_MODELS and args.window_sec == 0:
+        safe_bs = 1 if args.model.lower() == "shallowconvnet" else min(args.batch_size, 2)
+        if safe_bs < args.batch_size:
+            print(f"  [Auto-batch] Reducing batch_size {args.batch_size} -> {safe_bs} for {args.model} on full signal")
+            args.batch_size = safe_bs
+
     print(f"Creating {args.k}-fold cross-validation...")
 
     if use_windowing:
@@ -404,13 +411,6 @@ def main():
             num_workers=args.num_workers,
             pin_memory=args.pin_memory and torch.cuda.is_available(),
         )
-
-    HEAVY_MODELS = {"eegconformer", "cnn_lstm", "shallowconvnet"}
-    if args.model.lower() in HEAVY_MODELS and args.window_sec == 0:
-        safe_bs = min(args.batch_size, 2)
-        if safe_bs < args.batch_size:
-            print(f"  [Auto-batch] Reducing batch_size {args.batch_size} -> {safe_bs} for {args.model} on full signal")
-            args.batch_size = safe_bs
 
     out_dir = build_out_dir(args)
     plots_dir = out_dir / "plots"
@@ -619,6 +619,9 @@ def main():
             "train_accs": train_accs or [0.0],
             "val_accs": val_accs or [0.0],
         })
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     df_fold = pd.DataFrame(all_fold_metrics)
     df_fold.to_csv(out_dir / "fold_metrics.csv", index=False)
