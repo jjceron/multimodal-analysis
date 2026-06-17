@@ -1,0 +1,130 @@
+============================================================
+DATASET OVERVIEW
+============================================================
+Total subjects: 53
+  HC  (class 0): 29 (54.7%)
+  MDD (class 1): 24 (45.3%)
+Channels: 128
+Timepoints per sample: 30000
+Sampling rate: 250.0 Hz
+Duration: 120 s
+Condition: Eyes Closed (EC)
+Plot saved: class_distribution.png
+
+============================================================
+DEMOGRAPHICS
+============================================================
+  gender:
+    34.0: 5
+    28.0: 4
+    29.0: 4
+    20.0: 3
+    42.0: 3
+    21.0: 3
+    41.0: 3
+    23.0: 3
+    22.0: 3
+    45.0: 2
+    26.0: 2
+    24.0: 2
+    52.0: 2
+    40.0: 2
+    18.0: 1
+    25.0: 1
+    30.0: 1
+    16.0: 1
+    35.0: 1
+    46.0: 1
+    51.0: 1
+    27.0: 1
+    31.0: 1
+    43.0: 1
+    33.0: 1
+    19.0: 1
+  group:
+    HC: 29
+    MDD: 24
+  age: mean=nan ± nan, range=[nan, nan]
+============================================================
+DATASET OVERVIEW
+============================================================
+Total subjects: 53
+  HC  (class 0): 29 (54.7%)
+  MDD (class 1): 24 (45.3%)
+Channels: 128
+Timepoints per sample: 30000
+Sampling rate: 250.0 Hz
+Duration: 120 s
+Condition: Eyes Closed (EC)
+Plot saved: class_distribution.png
+
+============================================================
+DEMOGRAPHICS
+============================================================
+  group:
+    HC: 29
+    MDD: 24
+  age: mean=nan +/- nan, range=[nan, nan]
+  education(years): mean=14.7 +/- 3.3, range=[6.0, 19.0]
+  PHQ-9: mean=9.8 +/- 8.3, range=[0.0, 24.0]
+  GAD-7: mean=7.2 +/- 6.7, range=[0.0, 21.0]
+  PSQI: mean=7.9 +/- 5.3, range=[0.0, 21.0]
+  Plot saved: age_distribution.png
+
+============================================================
+PER-SUBJECT ANALYSIS — EEGNet/Aggregation_b16
+============================================================
+  Total predictions: 97
+  Subjects: 53
+
+  5 worst classified subjects:
+    sub-004 (MDD): 0/1 = 0%
+    sub-005 (MDD): 0/1 = 0%
+    sub-006 (MDD): 0/1 = 0%
+    sub-011 (MDD): 0/1 = 0%
+    sub-012 (MDD): 0/1 = 0%
+
+  5 best classified subjects:
+    sub-008 (MDD): 1/1 = 100%
+    sub-010 (MDD): 1/1 = 100%
+    sub-015 (MDD): 1/1 = 100%
+    sub-017 (MDD): 1/1 = 100%
+    sub-018 (MDD): 1/1 = 100%
+  Saved: per_subject_stats_EEGNet_Aggregation_b16.csv
+
+============================================================
+PER-SUBJECT ANALYSIS — EEGNet/Aggregation
+============================================================
+  Total predictions: 97
+  Subjects: 53
+
+  5 worst classified subjects:
+    sub-003 (MDD): 0/3 = 0%
+    sub-004 (MDD): 0/1 = 0%
+    sub-005 (MDD): 0/1 = 0%
+    sub-006 (MDD): 0/1 = 0%
+    sub-007 (MDD): 0/3 = 0%
+
+  5 best classified subjects:
+    sub-013 (MDD): 1/1 = 100%
+    sub-017 (MDD): 1/1 = 100%
+    sub-018 (MDD): 1/1 = 100%
+    sub-022 (MDD): 4/4 = 100%
+    sub-027 (HC): 2/2 = 100%
+  Saved: per_subject_stats_EEGNet_Aggregation.csv
+
+============================================================
+POWER SPECTRAL DENSITY ANALYSIS
+============================================================
+============================================================
+DATASET OVERVIEW
+============================================================
+Total subjects: 53
+  HC  (class 0): 29 (54.7%)
+  MDD (class 1): 24 (45.3%)
+Channels: 128
+Timepoints per sample: 30000
+Sampling rate: 250.0 Hz
+Duration: 120 s
+Condition: Eyes Closed (EC)
+Plot saved: class_distribution.png

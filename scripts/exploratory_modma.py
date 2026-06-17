@@ -194,7 +194,7 @@ def analyze_psd(ds, sfreq: float):
         freqs = None
         psd_sum = None
         for i in idx:
-            eeg = ds.samples[i]["eeg"].astype(np.float64)
+            eeg = ds.samples[i]["eeg"].cpu().numpy().astype(np.float64)
             f, Pxx = sp_signal.welch(eeg, fs=sfreq, nperseg=nperseg, axis=-1)
             if freqs is None:
                 freqs = f
@@ -333,6 +333,13 @@ def analyze_demographics():
 
     df = pd.read_csv(tsv_path, sep="\t")
     df.columns = [c.replace("\uff08", "(").replace("\uff09", ")") for c in df.columns]
+    log("  Columns: %s" % str(list(df.columns)))
+
+    num_cols_all = ["age", "education(years)", "PHQ-9", "GAD-7", "PSQI"]
+    for col in num_cols_all:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
     log("\n" + "=" * 60)
     log("DEMOGRAPHICS")
     log("=" * 60)
@@ -342,10 +349,11 @@ def analyze_demographics():
         for val, cnt in df["group"].value_counts().items():
             log(f"    {val}: {cnt}")
 
-    num_cols = ["age", "education(years)", "PHQ-9", "GAD-7", "PSQI"]
-    for col in num_cols:
-        if col in df.columns:
-            series = df[col].dropna()
+    for col in df.columns:
+        if col in ("participant_id", "group"):
+            continue
+        series = df[col].dropna()
+        if series.dtype.kind in "iuf":
             log(f"  {col}: mean={series.mean():.1f} +/- {series.std():.1f}, "
                 f"range=[{series.min()}, {series.max()}]")
 

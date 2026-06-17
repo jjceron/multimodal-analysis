@@ -1,0 +1,9 @@
+{
+  "n_subjects": 53,
+  "n_hc": 29,
+  "n_mdd": 24,
+  "n_channels": 128,
+  "n_timepoints": 30000,
+  "sfreq": 250.0,
+  "condition": "EC"
+}
