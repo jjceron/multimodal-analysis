@@ -103,7 +103,7 @@ class CSPLDA(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Riemannian LogDiag + LogisticRegression (fast, scalable to many windows)
+# Riemannian (Covariances + log-diag + LogisticRegression)
 # ---------------------------------------------------------------------------
 class RiemannianMDM(nn.Module):
     _is_sklearn = True
@@ -117,11 +117,16 @@ class RiemannianMDM(nn.Module):
         self.n_channels = n_channels
         self.n_classes = n_classes
         from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import FunctionTransformer
         from pyriemann.estimation import Covariances
-        from pyriemann.embedding import LogDiag
+
+        def _log_diag(covs):
+            diag = np.array([np.diag(c) for c in covs])
+            return np.log(np.clip(diag, a_min=1e-10, a_max=None))
+
         self.pipeline = Pipeline([
             ("cov", Covariances(estimator='lwf')),
-            ("logdiag", LogDiag()),
+            ("logdiag", FunctionTransformer(_log_diag)),
             ("clf", LogisticRegression(max_iter=1000)),
         ])
         self.fitted = False
