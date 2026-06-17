@@ -404,6 +404,13 @@ def main():
             pin_memory=args.pin_memory and torch.cuda.is_available(),
         )
 
+    HEAVY_MODELS = {"eegconformer", "cnn_lstm"}
+    if args.model.lower() in HEAVY_MODELS and args.window_sec == 0:
+        safe_bs = min(args.batch_size, 4)
+        if safe_bs < args.batch_size:
+            print(f"  [Auto-batch] Reducing batch_size {args.batch_size} -> {safe_bs} for {args.model} on full signal")
+            args.batch_size = safe_bs
+
     out_dir = build_out_dir(args)
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
