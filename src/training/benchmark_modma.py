@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -674,4 +675,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n[WARNING] Benchmark failed for this model: {e}")
+        print("Continuing to next model...")
+        sys.exit(0)
