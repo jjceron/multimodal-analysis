@@ -27,6 +27,10 @@ st.markdown("Benchmark results on **MODMA** dataset — 5-fold cross-validation"
 ds = st.session_state.get("selected_dataset", "modma_db")
 df_summary = load_all_experiments_summary(ds)
 
+sel_v = st.session_state.get("selected_version")
+if sel_v and "version" in df_summary.columns:
+    df_summary = df_summary[df_summary["version"] == sel_v].copy()
+
 if df_summary.empty:
     st.info("""
     ### No experiments yet

@@ -234,7 +234,7 @@ def plot_dual_confusion_matrix(
 def plot_metrics_comparison(df: pd.DataFrame, prefix: str = "test") -> go.Figure:
     fig = go.Figure()
 
-    x_labels = df["model"] + "/" + df["version"]
+    x_labels = df["model"]
 
     for metric, color, label in [
         ("accuracy", "#4A90D9", "Accuracy"),
