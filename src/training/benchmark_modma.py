@@ -14,7 +14,7 @@ import torch.nn as nn
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
 from src.datasets.modma_db import MODMADataset, create_dataloaders, create_windowed_dataloaders, DEFAULT_ROOT
-from src.models import EEGNet, EEGFormer
+from src.models import EEGNet, EEGFormer, CSPLDA, RiemannianMDM, BandPowerSVM
 from src.utils.plotting import save_fold_figures, plot_dual_confusion_matrix
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -72,7 +72,7 @@ def parse_args():
 
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--model", type=str, default="eegnet",
-                        choices=["eegnet", "eegformer"],
+                        choices=["eegnet", "eegformer", "csp_lda", "riemann_mdm", "bandpower_svm"],
                         help="Model architecture")
     parser.add_argument("--model-name", type=str, default=None,
                         help="Override directory name (default: capitalized --model)")
@@ -266,6 +266,17 @@ def evaluate_subject_level(
 
 
 def build_model(args, n_channels: int, n_classes: int) -> nn.Module:
+    model_key = args.model.lower()
+
+    if model_key in ("csp_lda", "riemann_mdm", "bandpower_svm"):
+        if model_key == "csp_lda":
+            return CSPLDA(n_channels=n_channels, n_classes=n_classes)
+        elif model_key == "riemann_mdm":
+            return RiemannianMDM(n_channels=n_channels, n_classes=n_classes)
+        else:
+            return BandPowerSVM(n_channels=n_channels, n_classes=n_classes,
+                                window_sec=max(args.window_sec, 2.0))
+
     sfreq = 250.0
     if getattr(args, 'window_sec', 0.0) > 0:
         n_samples = int(round(args.window_sec * sfreq))
@@ -276,7 +287,7 @@ def build_model(args, n_channels: int, n_classes: int) -> nn.Module:
         n_samples, args.pool1, args.pool2, args.model,
     )
 
-    if args.model.lower() == "eegnet":
+    if model_key == "eegnet":
         return EEGNet(
             n_channels=n_channels,
             n_classes=n_classes,
@@ -298,7 +309,11 @@ def build_model(args, n_channels: int, n_classes: int) -> nn.Module:
 
 
 def build_out_dir(args) -> Path:
-    model_name = args.model_name or {"eegnet": "EEGNet", "eegformer": "EEGFormer"}.get(args.model.lower(), args.model.capitalize())
+    NAME_MAP = {
+        "eegnet": "EEGNet", "eegformer": "EEGFormer",
+        "csp_lda": "CSPLDA", "riemann_mdm": "RiemannianMDM", "bandpower_svm": "BandPowerSVM",
+    }
+    model_name = args.model_name or NAME_MAP.get(args.model.lower(), args.model.capitalize())
     version = args.version_name or args.run_name or time.strftime("%Y%m%d_%H%M%S")
     out_dir = OUTPUT_ROOT / model_name / version
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -418,70 +433,85 @@ def main():
         model = build_model(args, n_channels=n_channels, n_classes=n_classes)
         model = model.to(device)
 
-        optimizer = torch.optim.Adam(
-            model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
-        )
-        criterion = nn.CrossEntropyLoss()
+        is_sklearn = getattr(model, '_is_sklearn', False)
 
-        scheduler = None
-        if args.lr_scheduler:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, mode="min", factor=args.lr_factor,
-                patience=args.lr_patience, min_lr=1e-6,
+        if is_sklearn:
+            print("  Fitting sklearn model...")
+            model.fit(train_loader, device)
+            train_losses: list[float] = []
+            val_losses: list[float] = []
+            train_accs: list[float] = []
+            val_accs: list[float] = []
+            best_epoch = 0
+            n_epochs = 1
+        else:
+            optimizer = torch.optim.Adam(
+                model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
             )
+            criterion = nn.CrossEntropyLoss()
 
-        best_val_loss = float("inf")
-        best_state_dict = None
-        patience_counter = 0
-        current_lr = args.lr
-
-        train_losses: list[float] = []
-        val_losses: list[float] = []
-        train_accs: list[float] = []
-        val_accs: list[float] = []
-        lr_log: list[float] = []
-
-        for epoch in range(1, args.epochs + 1):
-            train_loss, train_acc = train_one_epoch(
-                model, train_loader, optimizer, criterion, device,
-            )
-            val_loss, val_acc, _, _ = validate(
-                model, val_loader, criterion, device,
-            )
-
-            train_losses.append(train_loss)
-            val_losses.append(val_loss)
-            train_accs.append(train_acc)
-            val_accs.append(val_acc)
-
-            if scheduler is not None:
-                scheduler.step(val_loss)
-                current_lr = optimizer.param_groups[0]["lr"]
-                lr_log.append(current_lr)
-
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_state_dict = model.state_dict()
-                patience_counter = 0
-            else:
-                patience_counter += 1
-
-            if epoch == 1 or epoch % 10 == 0 or patience_counter == 0:
-                lr_str = f" lr={current_lr:.2e}" if scheduler is not None else ""
-                print(
-                    f"  Epoch {epoch:3d}/{args.epochs} | "
-                    f"Train loss: {train_loss:.4f} acc: {train_acc:.4f} | "
-                    f"Val loss: {val_loss:.4f} acc: {val_acc:.4f} |"
-                    f"{lr_str}"
-                    f" Patience: {patience_counter:2d}/{args.patience}"
+            scheduler = None
+            if args.lr_scheduler:
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer, mode="min", factor=args.lr_factor,
+                    patience=args.lr_patience, min_lr=1e-6,
                 )
 
-            if patience_counter >= args.patience:
-                print(f"  Early stopping at epoch {epoch}")
-                break
+            best_val_loss = float("inf")
+            best_state_dict = None
+            patience_counter = 0
+            current_lr = args.lr
 
-        if best_state_dict is not None:
-            model.load_state_dict(best_state_dict)
+            train_losses = []
+            val_losses = []
+            train_accs = []
+            val_accs = []
+            lr_log: list[float] = []
+
+            for epoch in range(1, args.epochs + 1):
+                train_loss, train_acc = train_one_epoch(
+                    model, train_loader, optimizer, criterion, device,
+                )
+                val_loss, val_acc, _, _ = validate(
+                    model, val_loader, criterion, device,
+                )
+
+                train_losses.append(train_loss)
+                val_losses.append(val_loss)
+                train_accs.append(train_acc)
+                val_accs.append(val_acc)
+
+                if scheduler is not None:
+                    scheduler.step(val_loss)
+                    current_lr = optimizer.param_groups[0]["lr"]
+                    lr_log.append(current_lr)
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_state_dict = model.state_dict()
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+
+                if epoch == 1 or epoch % 10 == 0 or patience_counter == 0:
+                    lr_str = f" lr={current_lr:.2e}" if scheduler is not None else ""
+                    print(
+                        f"  Epoch {epoch:3d}/{args.epochs} | "
+                        f"Train loss: {train_loss:.4f} acc: {train_acc:.4f} | "
+                        f"Val loss: {val_loss:.4f} acc: {val_acc:.4f} |"
+                        f"{lr_str}"
+                        f" Patience: {patience_counter:2d}/{args.patience}"
+                    )
+
+                if patience_counter >= args.patience:
+                    print(f"  Early stopping at epoch {epoch}")
+                    break
+
+            if best_state_dict is not None:
+                model.load_state_dict(best_state_dict)
+
+            best_epoch = len(train_losses) - patience_counter
+            n_epochs = len(train_losses)
 
         if use_windowing:
             y_true_val, y_pred_val, val_metrics, val_subjects = evaluate_subject_level(
@@ -502,8 +532,8 @@ def main():
 
         fold_metrics = {
             "fold": fold_id,
-            "best_epoch": len(train_losses) - patience_counter,
-            "n_epochs": len(train_losses),
+            "best_epoch": best_epoch,
+            "n_epochs": n_epochs,
             "val_accuracy": accuracy_score(y_true_val, y_pred_val),
             "val_balanced_accuracy": balanced_accuracy_score(y_true_val, y_pred_val),
             "val_f1_macro": f1_score(y_true_val, y_pred_val, average="macro"),
@@ -541,28 +571,29 @@ def main():
         overall_test_true.extend(y_true_test)
         overall_test_pred.extend(y_pred_test)
 
-        save_fold_figures(
-            fold_id=fold_id,
-            train_losses=train_losses,
-            val_losses=val_losses,
-            train_metrics=train_accs,
-            val_metrics=val_accs,
-            y_true_val=y_true_val,
-            y_pred_val=y_pred_val,
-            y_true_test=y_true_test,
-            y_pred_test=y_pred_test,
-            class_names=class_names,
-            output_dir=plots_dir,
-            metric_name="Accuracy",
-        )
+        if not is_sklearn:
+            save_fold_figures(
+                fold_id=fold_id,
+                train_losses=train_losses,
+                val_losses=val_losses,
+                train_metrics=train_accs,
+                val_metrics=val_accs,
+                y_true_val=y_true_val,
+                y_pred_val=y_pred_val,
+                y_true_test=y_true_test,
+                y_pred_test=y_pred_test,
+                class_names=class_names,
+                output_dir=plots_dir,
+                metric_name="Accuracy",
+            )
 
         fold_data_list.append({
             "fold_id": fold_id,
             "best_epoch": fold_metrics["best_epoch"],
-            "train_losses": train_losses,
-            "val_losses": val_losses,
-            "train_accs": train_accs,
-            "val_accs": val_accs,
+            "train_losses": train_losses or [0.0],
+            "val_losses": val_losses or [0.0],
+            "train_accs": train_accs or [0.0],
+            "val_accs": val_accs or [0.0],
         })
 
     df_fold = pd.DataFrame(all_fold_metrics)
