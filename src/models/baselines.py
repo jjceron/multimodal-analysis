@@ -22,9 +22,11 @@ def _to_numpy(x: torch.Tensor) -> np.ndarray:
     return x.cpu().numpy()
 
 
-def _normalize_cov(x: np.ndarray) -> np.ndarray:
+def _normalize_cov(x: np.ndarray, shrinkage: float = 0.1) -> np.ndarray:
     cov = np.cov(x.reshape(x.shape[0], -1))
-    return cov / np.trace(cov)
+    n = cov.shape[0]
+    cov_shrunk = (1 - shrinkage) * cov + shrinkage * np.eye(n) * np.trace(cov) / n
+    return cov_shrunk / np.trace(cov_shrunk)
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +57,9 @@ class CSPLDA(nn.Module):
             X_cls = X[y == cls]
             covs[cls] = np.mean([_normalize_cov(x) for x in X_cls], axis=0)
 
-        eigvals, eigvecs = linalg.eigh(covs[classes[0]], covs[classes[0]] + covs[classes[1]])
+        reg = 1e-6 * np.trace(covs[classes[0]] + covs[classes[1]]) / self.n_channels
+        B = covs[classes[0]] + covs[classes[1]] + reg * np.eye(self.n_channels)
+        eigvals, eigvecs = linalg.eigh(covs[classes[0]], B)
         idx = np.argsort(eigvals)[::-1]
         W = eigvecs[:, idx]
         n = self.n_components
