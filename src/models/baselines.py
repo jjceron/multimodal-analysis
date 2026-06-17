@@ -103,7 +103,7 @@ class CSPLDA(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Riemannian TangentSpace + LogisticRegression (replaces slow MDM)
+# Riemannian LogDiag + LogisticRegression (fast, scalable to many windows)
 # ---------------------------------------------------------------------------
 class RiemannianMDM(nn.Module):
     _is_sklearn = True
@@ -118,10 +118,10 @@ class RiemannianMDM(nn.Module):
         self.n_classes = n_classes
         from sklearn.linear_model import LogisticRegression
         from pyriemann.estimation import Covariances
-        from pyriemann.tangentspace import TangentSpace
+        from pyriemann.embedding import LogDiag
         self.pipeline = Pipeline([
             ("cov", Covariances(estimator='lwf')),
-            ("ts", TangentSpace()),
+            ("logdiag", LogDiag()),
             ("clf", LogisticRegression(max_iter=1000)),
         ])
         self.fitted = False
