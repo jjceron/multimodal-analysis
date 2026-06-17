@@ -23,10 +23,10 @@ from utils.plots import (
 )
 from utils.sidebar import render_sidebar
 
-st.set_page_config(page_title="Training", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Experiments", page_icon="📊", layout="wide")
 render_sidebar()
 
-st.title("Training")
+st.title("Training Experiments")
 
 sel_m = st.session_state.get("selected_model")
 sel_v = st.session_state.get("selected_version")
