@@ -44,6 +44,46 @@ if not sel_m or not sel_v:
 SKLEARN_NAMES = {"CSPLDA", "RiemannianMDM", "BandPowerSVM"}
 is_sklearn = sel_m in SKLEARN_NAMES
 
+
+def build_deep_model(sel_m, cfg, n_ch, n_cls, T):
+    from src.models import EEGNet, EEGFormer, EEGConformer, ShallowConvNet, CNNLSTM
+
+    pool1 = cfg.get("pool1", 8)
+    pool2 = cfg.get("pool2", 8)
+
+    if sel_m == "EEGNet":
+        return EEGNet(
+            n_channels=n_ch, n_classes=n_cls,
+            F1=cfg.get("F1", 8), D=cfg.get("D", 2), F2=cfg.get("F2", 16),
+            pool1=pool1, pool2=pool2,
+            dropout=cfg.get("dropout", 0.5), meanmax_alpha=cfg.get("meanmax_alpha", 0.0),
+            aggregate=True,
+        )
+    if sel_m == "EEGFormer":
+        return EEGFormer(
+            n_channels=n_ch, n_samples=T, num_classes=n_cls,
+            F1=cfg.get("F1", 8), D=cfg.get("D", 2), F2=cfg.get("F2", 16),
+            pool1=pool1, pool2=pool2,
+            dropout_eeg=cfg.get("dropout", 0.5),
+        )
+    if sel_m == "EEGConformer":
+        return EEGConformer(
+            num_channels=n_ch, n_samples=T, num_classes=n_cls,
+            dropout=cfg.get("dropout", 0.5),
+        )
+    if sel_m == "ShallowConvNet":
+        return ShallowConvNet(
+            n_channels=n_ch, n_classes=n_cls, n_samples=T,
+            dropout=cfg.get("dropout", 0.5),
+        )
+    if sel_m == "CNNLSTM":
+        return CNNLSTM(
+            n_channels=n_ch, n_classes=n_cls, n_samples=T,
+            dropout=cfg.get("dropout", 0.5),
+        )
+    raise ValueError(f"Unknown deep model: {sel_m}")
+
+
 cfg = load_config(ds, sel_m, sel_v)
 df_folds = load_fold_metrics(ds, sel_m, sel_v)
 results = load_results(ds, sel_m, sel_v)
@@ -92,82 +132,77 @@ with tab_struct:
         st.json(cfg)
     else:
         try:
-            sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-            from src.models import EEGNet
-
-            model = EEGNet(
-                n_channels=n_ch, n_classes=n_cls,
-                F1=cfg.get("F1", 8), D=cfg.get("D", 2), F2=cfg.get("F2", 16),
-                dropout=cfg.get("dropout", 0.5), meanmax_alpha=cfg.get("meanmax_alpha", 0.5),
-                aggregate=True,
-            )
-        except Exception:
-            st.info(f"Cannot build model for {sel_m}")
+            model = build_deep_model(sel_m, cfg, n_ch, n_cls, T)
+        except Exception as e:
+            st.info(f"Cannot build model {sel_m}: {e}")
             st.stop()
 
-        col_diag, col_info = st.columns([2, 1], gap="large")
+        if sel_m == "EEGNet":
+            col_diag, col_info = st.columns([2, 1], gap="large")
+            with col_diag:
+                st.markdown("##### End-to-End Pipeline")
+                pipes = []
+                if use_win:
+                    n_win = f"~{int(duration * fs / win['stride'])}/subj"
+                    pipes.append(
+                        ("Raw EEG", f"{n_ch} ch × {int(duration*fs)} samples\n({duration}s @ {fs}Hz)", "#636efa",
+                         "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
+                    )
+                    pipes.append(
+                        ("Windowing", f"{win['window_sec']}s windows\n{win['window_samples']} samples\n{n_win}", "#b6a2d6",
+                         f"→ ({n_ch}, {win['window_samples']})\noverlap {win['overlap']:.0%}"),
+                    )
+                else:
+                    pipes.append(
+                        ("Raw EEG", f"{n_ch} ch × {T} samples\n({duration}s @ {fs}Hz)", "#636efa",
+                         "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
+                    )
+                pipes += [
+                    ("Temporal Conv", f"Conv2d 1 → {cfg.get('F1',8)}\nkernel=(1,63)\nBatchNorm", "#00cc96",
+                     f"→ ({cfg.get('F1',8)}, {n_ch}, {T})"),
+                    ("Depthwise Spatial", f"DepthConv {cfg.get('F1',8)} → {cfg.get('F1',8)*cfg.get('D',2)}\n"
+                     f"kernel=({n_ch},1) groups={cfg.get('F1',8)}", "#ef553b",
+                     f"→ ({cfg.get('F1',8)*cfg.get('D',2)}, 1, {T // cfg.get('pool1',8)})\nELU + AvgPool + Dropout"),
+                    ("Separable Conv", f"DepthConv → Pointwise\n{cfg.get('F1',8)*cfg.get('D',2)} → {cfg.get('F2',16)}", "#ab63fa",
+                     f"→ ({cfg.get('F2',16)}, 1, {T // cfg.get('pool1',8) // cfg.get('pool2',8)})\nELU + AvgPool + Dropout"),
+                    ("Classifier", f"Conv2d {cfg.get('F2',16)} → {n_cls}\nkernel=(1,1)", "#ffa15a",
+                     f"→ logits per time-step"),
+                    ("Aggregation", f"Mean Pooling\nα = {cfg.get('meanmax_alpha', 0.0)}", "#19d3f3",
+                     f"→ ({n_cls})"),
+                    ("Output", f"HC vs MDD\n({n_cls} classes)", "#e6ab02",
+                     f"logits → softmax"),
+                ]
 
-        with col_diag:
-            st.markdown("##### End-to-End Pipeline")
-            pipes = []
-            if use_win:
-                n_win = f"~{int(duration * fs / win['stride'])}/subj"
-                pipes.append(
-                    ("Raw EEG", f"{n_ch} ch × {int(duration*fs)} samples\n({duration}s @ {fs}Hz)", "#636efa",
-                     "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
-                )
-                pipes.append(
-                    ("Windowing", f"{win['window_sec']}s windows\n{win['window_samples']} samples\n{n_win}", "#b6a2d6",
-                     f"→ ({n_ch}, {win['window_samples']})\noverlap {win['overlap']:.0%}"),
-                )
-            else:
-                pipes.append(
-                    ("Raw EEG", f"{n_ch} ch × {T} samples\n({duration}s @ {fs}Hz)", "#636efa",
-                     "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
-                )
-            pipes += [
-                ("Temporal Conv", f"Conv2d 1 → {cfg.get('F1',8)}\nkernel=(1,63)\nBatchNorm", "#00cc96",
-                 f"→ ({cfg.get('F1',8)}, {n_ch}, {T})"),
-                ("Depthwise Spatial", f"DepthConv {cfg.get('F1',8)} → {cfg.get('F1',8)*cfg.get('D',2)}\n"
-                 f"kernel=({n_ch},1) groups={cfg.get('F1',8)}", "#ef553b",
-                 f"→ ({cfg.get('F1',8)*cfg.get('D',2)}, 1, {T // cfg.get('pool1',8)})\nELU + AvgPool + Dropout"),
-                ("Separable Conv", f"DepthConv → Pointwise\n{cfg.get('F1',8)*cfg.get('D',2)} → {cfg.get('F2',16)}", "#ab63fa",
-                 f"→ ({cfg.get('F2',16)}, 1, {T // cfg.get('pool1',8) // cfg.get('pool2',8)})\nELU + AvgPool + Dropout"),
-                ("Classifier", f"Conv2d {cfg.get('F2',16)} → {n_cls}\nkernel=(1,1)", "#ffa15a",
-                 f"→ logits per time-step"),
-                ("Aggregation", f"Mean-Max Pooling\nα = {cfg.get('meanmax_alpha',0.5)}", "#19d3f3",
-                 f"→ ({n_cls})"),
-                ("Output", f"HC vs MDD\n({n_cls} classes)", "#e6ab02",
-                 f"logits → softmax"),
-            ]
-
-            n_pipes = len(pipes)
-            fig = go.Figure()
-            fig.update_layout(showlegend=False, xaxis=dict(visible=False, range=[-1.5, 1.5]),
-                              yaxis=dict(visible=False, range=[-1, n_pipes - 0.5]),
-                              height=420 + n_pipes * 30,
-                              margin=dict(l=10, r=10, t=10, b=10),
-                              plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-            y_positions = [n_pipes - i - 0.5 for i in range(n_pipes)]
-            for i, (name, inner, color, out) in enumerate(pipes):
-                yc = y_positions[i]
-                bw, bh = 1.4, 0.45
-                fig.add_shape(type="rect", x0=-bw/2, x1=bw/2, y0=yc-bh/2, y1=yc+bh/2,
-                              line=dict(color=color, width=2), fillcolor=color, opacity=0.12)
-                fig.add_annotation(x=-bw/2-0.08, y=yc, xanchor="right", text=f"<b>{name}</b>",
-                                   font=dict(size=11, color=color), showarrow=False)
-                fig.add_annotation(x=0, y=yc, text=inner.replace("\n", "<br>"),
-                                   font=dict(size=9, color="#666"), showarrow=False)
-                fig.add_annotation(x=bw/2+0.08, y=yc, xanchor="left",
-                                   text=f"<span style='color:#999'>{out.replace(chr(10),'<br>')}</span>",
-                                   showarrow=False)
-                if i < len(pipes) - 1:
-                    ny = y_positions[i + 1]
-                    fig.add_annotation(x=0, y=(yc-bh/2 + ny+0.225)/2, ax=0, ay=yc-bh/2,
-                                       axref="x", ayref="y", xref="x", yref="y",
-                                       showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=1.5, arrowcolor="#bbb")
-            st.plotly_chart(fig, use_container_width=True, key="pipeline")
-
+                n_pipes = len(pipes)
+                fig = go.Figure()
+                fig.update_layout(showlegend=False, xaxis=dict(visible=False, range=[-1.5, 1.5]),
+                                  yaxis=dict(visible=False, range=[-1, n_pipes - 0.5]),
+                                  height=420 + n_pipes * 30,
+                                  margin=dict(l=10, r=10, t=10, b=10),
+                                  plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+                y_positions = [n_pipes - i - 0.5 for i in range(n_pipes)]
+                for i, (name, inner, color, out) in enumerate(pipes):
+                    yc = y_positions[i]
+                    bw, bh = 1.4, 0.45
+                    fig.add_shape(type="rect", x0=-bw/2, x1=bw/2, y0=yc-bh/2, y1=yc+bh/2,
+                                  line=dict(color=color, width=2), fillcolor=color, opacity=0.12)
+                    fig.add_annotation(x=-bw/2-0.08, y=yc, xanchor="right", text=f"<b>{name}</b>",
+                                       font=dict(size=11, color=color), showarrow=False)
+                    fig.add_annotation(x=0, y=yc, text=inner.replace("\n", "<br>"),
+                                       font=dict(size=9, color="#666"), showarrow=False)
+                    fig.add_annotation(x=bw/2+0.08, y=yc, xanchor="left",
+                                       text=f"<span style='color:#999'>{out.replace(chr(10),'<br>')}</span>",
+                                       showarrow=False)
+                    if i < len(pipes) - 1:
+                        ny = y_positions[i + 1]
+                        fig.add_annotation(x=0, y=(yc-bh/2 + ny+0.225)/2, ax=0, ay=yc-bh/2,
+                                           axref="x", ayref="y", xref="x", yref="y",
+                                           showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=1.5, arrowcolor="#bbb")
+                st.plotly_chart(fig, use_container_width=True, key="pipeline")
+        else:
+            col_info = st.columns([1])[0]
+            with col_info:
+                st.markdown("##### Model Architecture")
         with col_info:
             total_p = sum(p.numel() for p in model.parameters())
             train_p = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -216,7 +251,11 @@ with tab_struct:
 
             dummy = torch.zeros(1, n_ch, T)
             with torch.no_grad():
-                logits, logits_time = model(dummy)
+                out = model(dummy)
+                if isinstance(out, tuple):
+                    logits, logits_time = out
+                else:
+                    logits, logits_time = out, None
 
             for h in hooks:
                 h.remove()
@@ -248,7 +287,7 @@ with tab_struct:
             f"{'Input':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{in_shape_log:<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
         )
 
-        skip_containers = {"temporal_block", "spatial_block", "separable_block", "eegnet"}
+        skip_containers = {"temporal_block", "spatial_block", "separable_block", "eegnet"} if sel_m == "EEGNet" else set()
         ordered = [p for p, _ in model.named_modules() if p and p not in skip_containers]
         for path in ordered:
             s = shapes.get(path)
@@ -259,17 +298,29 @@ with tab_struct:
                 f"{m_type:<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(s['in']):<{IN_WIDTH}}{'':<{COL_GAP}}{str(s['out']):<{OUT_WIDTH}}{'':<{COL_GAP}}{s['params']:<{PARAM_WIDTH}}"
             )
 
-        s_class = shapes.get("classifier", {}) or shapes.get("classifier.0", {})
-        out_shape = s_class.get("out") if s_class else None
-        if s_class and out_shape:
-            B, C, _, T_last = out_shape
-            logits_per_time = (B, T_last, C)
-            lines.append(
-                f"{'MeanMax':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(logits_per_time):<{IN_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
-            )
-            lines.append(
-                f"{'Output':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
-            )
+        if sel_m == "EEGNet":
+            s_class = shapes.get("classifier", {}) or shapes.get("classifier.0", {})
+            out_shape = s_class.get("out") if s_class else None
+            if s_class and out_shape:
+                B, C, _, T_last = out_shape
+                logits_per_time = (B, T_last, C)
+                lines.append(
+                    f"{'MeanPool':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(logits_per_time):<{IN_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
+                )
+                lines.append(
+                    f"{'Output':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str((B, C)):<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
+                )
+        else:
+            last_out = None
+            for path in reversed(ordered):
+                s = shapes.get(path)
+                if s and s["out"]:
+                    last_out = s["out"]
+                    break
+            if last_out:
+                lines.append(
+                    f"{'Output':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{str(last_out):<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
+                )
 
         lines.append(sep)
         lines.append(f"{'Total parameters':<{LABEL_WIDTH}}{'':<{COL_GAP}}{total_p:<{PARAM_WIDTH}}")

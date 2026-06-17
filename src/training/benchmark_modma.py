@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument("--pool1", type=int, default=8)
     parser.add_argument("--pool2", type=int, default=8)
     parser.add_argument("--dropout", type=float, default=0.5)
-    parser.add_argument("--meanmax-alpha", type=float, default=0.5)
+    parser.add_argument("--meanmax-alpha", type=float, default=0.0)
 
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--lr-scheduler", action="store_true",
