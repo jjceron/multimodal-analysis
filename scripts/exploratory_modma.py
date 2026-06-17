@@ -402,10 +402,10 @@ def main():
     analyze_demographics()
 
     benchmark_models = [
-        ("EEGNet/Aggregation_b16",
-         PROJECT_ROOT / "outputs" / "models" / "modma_db" / "EEGNet" / "Aggregation_b16"),
-        ("EEGNet/Aggregation",
-         PROJECT_ROOT / "outputs" / "models" / "modma_db" / "EEGNet" / "Aggregation"),
+        ("EEGNet/agg_b16",
+         PROJECT_ROOT / "outputs" / "models" / "modma_db" / "EEGNet" / "agg_b16"),
+        ("EEGNet/agg",
+         PROJECT_ROOT / "outputs" / "models" / "modma_db" / "EEGNet" / "agg"),
     ]
     for label, path in benchmark_models:
         if path.exists():

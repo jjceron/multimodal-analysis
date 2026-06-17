@@ -3,7 +3,7 @@ from __future__ import annotations
 import streamlit as st
 from utils.loader import list_models, list_versions
 
-DATASETS = ["modma_db"]
+DATASET_MAP = {"MODMA": "modma_db"}
 
 
 def render_sidebar() -> None:
@@ -18,18 +18,22 @@ def render_sidebar() -> None:
     st.sidebar.title("Neuro Signals DL")
 
     if "selected_dataset" not in st.session_state:
-        st.session_state.selected_dataset = DATASETS[-1]
+        st.session_state.selected_dataset = "modma_db"
     if "selected_model" not in st.session_state:
         st.session_state.selected_model = None
     if "selected_version" not in st.session_state:
         st.session_state.selected_version = None
 
-    dataset = st.sidebar.selectbox(
+    display_opts = list(DATASET_MAP.keys())
+    current_display = next((k for k, v in DATASET_MAP.items()
+                            if v == st.session_state.selected_dataset), display_opts[-1])
+    selected_display = st.sidebar.selectbox(
         "Dataset",
-        options=DATASETS,
-        index=DATASETS.index(st.session_state.selected_dataset) if st.session_state.selected_dataset in DATASETS else len(DATASETS) - 1,
+        options=display_opts,
+        index=display_opts.index(current_display),
         key="dataset_selector",
     )
+    dataset = DATASET_MAP[selected_display]
 
     models = list_models(dataset)
     sel_m = st.sidebar.selectbox(
