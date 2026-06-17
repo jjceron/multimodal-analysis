@@ -22,13 +22,23 @@ st.set_page_config(
 render_sidebar()
 
 st.title("EEG Analysis Overview")
-st.markdown("EEGNet baselines on **MODMA** dataset — 5-fold cross-validation")
+st.markdown("Benchmark results on **MODMA** dataset — 5-fold cross-validation")
 
 ds = st.session_state.get("selected_dataset", "modma_db")
 df_summary = load_all_experiments_summary(ds)
 
 if df_summary.empty:
-    st.warning("No experiments found. Run a benchmark first.")
+    st.info("""
+    ### No experiments yet
+
+    MODMA baselines are running on the remote machine. Results will appear here
+    automatically after `git pull`.
+
+    **Run locally:**
+    ```bash
+    python -m src.training.benchmark_modma --model eegnet --version-name baseline
+    ```
+    """, icon="🧪")
     st.stop()
 
 col1, col2, col3 = st.columns(3)

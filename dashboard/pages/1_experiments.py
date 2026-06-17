@@ -33,7 +33,12 @@ sel_v = st.session_state.get("selected_version")
 ds = st.session_state.get("selected_dataset", "modma_db")
 
 if not sel_m or not sel_v:
-    st.warning("Select a model and version from the sidebar.")
+    st.info("""
+    ### Select a model
+
+    Choose a model and version from the sidebar to view its training details,
+    architecture diagram, and per-fold results.
+    """, icon="📊")
     st.stop()
 
 cfg = load_config(ds, sel_m, sel_v)

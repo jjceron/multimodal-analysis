@@ -36,34 +36,39 @@ def render_sidebar() -> None:
     dataset = DATASET_MAP[selected_display]
 
     models = list_models(dataset)
+    has_models = bool(models)
     sel_m = st.sidebar.selectbox(
         "Model",
-        options=models if models else ["No models"],
-        index=len(models) - 1 if models else 0,
+        options=models if has_models else ["No models"],
+        index=len(models) - 1 if has_models else 0,
         key="model_selector",
     )
 
-    versions = list_versions(dataset, sel_m) if sel_m and sel_m != "No models" else []
+    has_valid_m = sel_m and sel_m != "No models"
+    versions = list_versions(dataset, sel_m) if has_valid_m else []
+    has_versions = bool(versions)
     sel_v = st.sidebar.selectbox(
         "Version",
-        options=versions if versions else ["No versions"],
-        index=len(versions) - 1 if versions else 0,
+        options=versions if has_versions else ["No versions"],
+        index=len(versions) - 1 if has_versions else 0,
         key="version_selector",
     )
 
+    has_valid_v = sel_v and sel_v != "No versions"
+
     changed = (
         dataset != st.session_state.selected_dataset
-        or sel_m != st.session_state.selected_model
-        or sel_v != st.session_state.selected_version
+        or (has_valid_m and sel_m != st.session_state.selected_model)
+        or (has_valid_v and sel_v != st.session_state.selected_version)
     )
 
     st.session_state.selected_dataset = dataset
-    if sel_m and sel_m != "No models":
+    if has_valid_m:
         st.session_state.selected_model = sel_m
-    if sel_v and sel_v != "No versions":
+    if has_valid_v:
         st.session_state.selected_version = sel_v
 
-    if changed:
+    if changed and (has_valid_m or has_valid_v):
         st.cache_data.clear()
         st.rerun()
 
