@@ -173,7 +173,7 @@ class BandPowerSVM(nn.Module):
         features = []
         for lo, hi in FREQ_BANDS.values():
             mask = (f >= lo) & (f <= hi)
-            bp = np.trapz(psd[:, :, mask], f[mask], axis=2)
+            bp = np.trapezoid(psd[:, :, mask], f[mask], axis=2)
             features.append(bp)
         return np.concatenate(features, axis=1)
 
