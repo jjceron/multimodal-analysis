@@ -159,16 +159,16 @@ def plot_fold_training_curves(
             ))
 
     fig_loss.update_layout(
-        title=dict(text="<b>Loss</b>", font=dict(size=14)), height=350,
+        title=dict(text="<b>Loss</b>", font=dict(size=14)), height=420, width=900,
         xaxis_title="Epoch", yaxis_title="Loss",
-        margin=dict(l=50, r=50, t=40, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=50, r=180, t=40, b=40),
+        legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02),
     )
     fig_metric.update_layout(
-        title=dict(text=f"<b>{metric_name}</b>", font=dict(size=14)), height=350,
+        title=dict(text=f"<b>{metric_name}</b>", font=dict(size=14)), height=420, width=900,
         xaxis_title="Epoch", yaxis_title=metric_name,
-        margin=dict(l=50, r=50, t=40, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=50, r=180, t=40, b=40),
+        legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02),
     )
 
     return fig_loss, fig_metric
