@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from collections import Counter
 from pathlib import Path
@@ -343,8 +344,10 @@ def save_json(path: Path, payload: dict) -> None:
 def main():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     torch.cuda.empty_cache()
 
+    print(f"\n>>> Running: {args.model} / {args.version_name} <<<\n")
     print(f"Device: {device}")
     print(f"Loading MODMA dataset...")
 
@@ -380,7 +383,7 @@ def main():
 
     HEAVY_MODELS = {"eegconformer", "cnn_lstm", "shallowconvnet"}
     if args.model.lower() in HEAVY_MODELS and args.window_sec == 0:
-        safe_bs = 1 if args.model.lower() == "shallowconvnet" else min(args.batch_size, 2)
+        safe_bs = 1 if args.model.lower() in {"shallowconvnet", "cnn_lstm"} else min(args.batch_size, 2)
         if safe_bs < args.batch_size:
             print(f"  [Auto-batch] Reducing batch_size {args.batch_size} -> {safe_bs} for {args.model} on full signal")
             args.batch_size = safe_bs

@@ -8,10 +8,10 @@ from torch import Tensor
 class PatchEmbedding(nn.Module):
     def __init__(
         self,
-        emb_size: int = 40,
+        emb_size: int = 32,
         num_channels: int = 22,
         temporal_kernel: int = 25,
-        num_filters: int = 40,
+        num_filters: int = 32,
         pool_kernel: int = 75,
         pool_stride: int = 15,
         dropout: float = 0.5,
@@ -57,10 +57,10 @@ class PatchEmbedding(nn.Module):
 class ClassificationHead(nn.Module):
     def __init__(self, emb_size: int, seq_len: int, dropout: float, num_classes: int) -> None:
         super().__init__()
-        in_features = seq_len * emb_size
         self.net = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
             nn.Flatten(),
-            nn.Linear(in_features, 256),
+            nn.Linear(emb_size, 256),
             nn.ELU(),
             nn.Dropout(p=dropout),
             nn.Linear(256, 32),
@@ -70,22 +70,23 @@ class ClassificationHead(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
+        x = x.transpose(1, 2)
         return self.net(x)
 
 
 class EEGConformer(nn.Module):
     def __init__(
         self,
-        emb_size: int = 40,
+        emb_size: int = 32,
         num_channels: int = 22,
         n_samples: int = 256,
         temporal_kernel: int = 25,
-        num_filters: int = 40,
+        num_filters: int = 32,
         pool_kernel: int = 75,
         pool_stride: int = 15,
-        num_heads: int = 10,
-        dim_feedforward: int = 160,
-        num_layers: int = 6,
+        num_heads: int = 4,
+        dim_feedforward: int = 128,
+        num_layers: int = 4,
         num_classes: int = 4,
         dropout: float = 0.5,
     ) -> None:
