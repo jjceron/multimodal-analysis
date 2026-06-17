@@ -46,6 +46,9 @@ col1, col2, col3 = st.columns(3)
 best_acc = (df_summary.loc[df_summary["test_accuracy"].idxmax(skipna=True)]
             if "test_accuracy" in df_summary.columns and df_summary["test_accuracy"].notna().any()
             else None)
+best_bal = (df_summary.loc[df_summary["test_balanced_accuracy"].idxmax(skipna=True)]
+            if "test_balanced_accuracy" in df_summary.columns and df_summary["test_balanced_accuracy"].notna().any()
+            else None)
 best_f1 = (df_summary.loc[df_summary["test_f1_macro"].idxmax(skipna=True)]
            if "test_f1_macro" in df_summary.columns and df_summary["test_f1_macro"].notna().any()
            else None)
@@ -53,17 +56,17 @@ best_f1 = (df_summary.loc[df_summary["test_f1_macro"].idxmax(skipna=True)]
 col1.metric(
     "Best Accuracy (test)",
     f"{best_acc['test_accuracy']:.2%}" if best_acc is not None else "—",
-    delta=f"±{best_acc['test_accuracy_std']:.2%}" if best_acc is not None else None,
+    delta=f"{best_acc['model']}/{best_acc['version']}  ±{best_acc['test_accuracy_std']:.2%}" if best_acc is not None else None,
 )
 col2.metric(
     "Best Balanced Acc (test)",
-    f"{best_acc['test_balanced_accuracy']:.2%}" if best_acc is not None else "—",
-    delta=f"±{best_acc['test_balanced_accuracy_std']:.2%}" if best_acc is not None else None,
+    f"{best_bal['test_balanced_accuracy']:.2%}" if best_bal is not None else "—",
+    delta=f"{best_bal['model']}/{best_bal['version']}  ±{best_bal['test_balanced_accuracy_std']:.2%}" if best_bal is not None else None,
 )
 col3.metric(
     "Best F1-macro (test)",
     f"{best_f1['test_f1_macro']:.4f}" if best_f1 is not None else "—",
-    delta=f"±{best_f1['test_f1_macro_std']:.4f}" if best_f1 is not None else None,
+    delta=f"{best_f1['model']}/{best_f1['version']}  ±{best_f1['test_f1_macro_std']:.4f}" if best_f1 is not None else None,
 )
 
 st.markdown("---")

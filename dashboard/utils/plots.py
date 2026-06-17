@@ -258,7 +258,7 @@ def plot_metrics_comparison(df: pd.DataFrame, prefix: str = "test") -> go.Figure
     fig.update_layout(
         barmode="group",
         xaxis_title="Experiment",
-        yaxis_title="Score",
+        yaxis=dict(title="Score", range=[0, 1]),
         height=400,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=40, r=40, t=40, b=80),
