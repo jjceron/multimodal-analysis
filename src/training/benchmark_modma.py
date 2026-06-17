@@ -20,6 +20,7 @@ from src.models import (
     BandPowerSVM, CNNLSTM, CSPLDA, EEGConformer, EEGFormer, EEGNet,
     RiemannianMDM, ShallowConvNet,
 )
+from src.models.augmentations import GaussianNoise, ChannelDropout, TimeMasking, Mixup, mixup_criterion
 from src.utils.plotting import save_fold_figures, plot_dual_confusion_matrix
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +62,8 @@ def parse_args():
     parser.add_argument("--pool2", type=int, default=8)
     parser.add_argument("--dropout", type=float, default=0.5)
     parser.add_argument("--meanmax-alpha", type=float, default=0.0)
+    parser.add_argument("--augment", action="store_true",
+                        help="Apply data augmentation (GaussianNoise, ChannelDropout, TimeMasking)")
 
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--lr-scheduler", action="store_true",
@@ -150,24 +153,47 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: torch.device,
+    augment: bool = False,
+    mixup_fn: Mixup | None = None,
 ) -> tuple[float, float]:
     model.train()
     total_loss = 0.0
     all_preds, all_labels = [], []
 
+    aug_transforms = nn.Sequential(
+        GaussianNoise(snr=20.0),
+        ChannelDropout(p=0.15),
+        TimeMasking(max_mask_ratio=0.15),
+    ) if augment else None
+
     for batch in loader:
         _, X, y = batch
         X, y = X.to(device), y.to(device)
 
+        if aug_transforms is not None:
+            X = aug_transforms(X)
+
         optimizer.zero_grad()
-        logits, _ = model(X)
-        loss = criterion(logits, y)
+
+        if mixup_fn is not None:
+            X, y_a, y_b = mixup_fn(X, y)
+            logits, _ = model(X)
+            loss = mixup_criterion(criterion, logits, y_a, y_b, mixup_fn.lam)
+        else:
+            logits, _ = model(X)
+            loss = criterion(logits, y)
+
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item() * X.size(0)
-        all_preds.extend(torch.argmax(logits, dim=1).cpu().tolist())
-        all_labels.extend(y.cpu().tolist())
+        preds = torch.argmax(logits, dim=1).cpu().tolist()
+        all_preds.extend(preds)
+
+        if mixup_fn is not None and mixup_fn.shuffled_idxs is not None:
+            all_labels.extend(y.cpu().tolist())
+        else:
+            all_labels.extend(y.cpu().tolist())
 
     avg_loss = total_loss / len(loader.dataset)
     acc = accuracy_score(all_labels, all_preds)
@@ -496,9 +522,12 @@ def main():
             val_accs = []
             lr_log: list[float] = []
 
+            mixup_fn = Mixup(alpha=0.2) if args.augment else None
+
             for epoch in range(1, args.epochs + 1):
                 train_loss, train_acc = train_one_epoch(
                     model, train_loader, optimizer, criterion, device,
+                    augment=args.augment, mixup_fn=mixup_fn,
                 )
                 val_loss, val_acc, _, _ = validate(
                     model, val_loader, criterion, device,
