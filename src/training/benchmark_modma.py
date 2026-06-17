@@ -13,7 +13,7 @@ import torch.nn as nn
 
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
-from src.datasets.modma_db import MODMADataset, create_dataloaders, DEFAULT_ROOT
+from src.datasets.modma_db import MODMADataset, create_dataloaders, create_windowed_dataloaders, DEFAULT_ROOT
 from src.models.eegnet import EEGNet
 from src.utils.plotting import save_fold_figures, plot_dual_confusion_matrix
 
@@ -75,6 +75,11 @@ def parse_args():
                         help="Model architecture name (used for directory structure)")
     parser.add_argument("--version-name", type=str, default=None,
                         help="Version/tag for this run (e.g., Baseline, Exp1)")
+
+    parser.add_argument("--window-sec", type=float, default=0.0,
+                        help="Window size in seconds (0 = no windowing, use full recording)")
+    parser.add_argument("--overlap", type=float, default=0.0,
+                        help="Overlap fraction (0.0 = no overlap, 0.5 = 50%%)")
 
     return parser.parse_args()
 
@@ -172,6 +177,46 @@ def evaluate(
     return all_labels, all_preds, metrics
 
 
+@torch.no_grad()
+def evaluate_subject_level(
+    model: nn.Module,
+    loader: torch.utils.data.DataLoader,
+    device: torch.device,
+) -> tuple[list[int], list[int], dict[str, float], list[str]]:
+    model.eval()
+    subject_votes: dict[str, list[int]] = {}
+    subject_trues: dict[str, int] = {}
+
+    for batch in loader:
+        names, X, y = batch
+        X = X.to(device)
+        logits, _ = model(X)
+        preds = torch.argmax(logits, dim=1).cpu().tolist()
+
+        for name, pred, true in zip(names, preds, y.tolist()):
+            if name not in subject_votes:
+                subject_votes[name] = []
+                subject_trues[name] = true
+            subject_votes[name].append(pred)
+
+    all_subjects: list[str] = []
+    all_preds: list[int] = []
+    all_labels: list[int] = []
+    for name, votes in subject_votes.items():
+        majority = max(set(votes), key=votes.count)
+        all_subjects.append(name)
+        all_preds.append(majority)
+        all_labels.append(subject_trues[name])
+
+    metrics = {
+        "accuracy": accuracy_score(all_labels, all_preds),
+        "balanced_accuracy": balanced_accuracy_score(all_labels, all_preds),
+        "f1_macro": f1_score(all_labels, all_preds, average="macro"),
+    }
+
+    return all_labels, all_preds, metrics, all_subjects
+
+
 def build_model(args, n_channels: int, n_classes: int) -> EEGNet:
     return EEGNet(
         n_channels=n_channels,
@@ -226,18 +271,41 @@ def main():
     label_counts = Counter(labels)
     print(f"  HC: {label_counts.get(0, 0)}, MDD: {label_counts.get(1, 0)}")
 
+    use_windowing = args.window_sec > 0
+    sfreq = 250.0
+
+    if use_windowing:
+        window_samples = int(round(args.window_sec * sfreq))
+        stride = int(round(window_samples * (1.0 - args.overlap)))
+        print(f"Windowing: {args.window_sec}s windows ({window_samples} samples), "
+              f"stride={stride}, overlap={args.overlap:.0%}")
+
     print(f"Creating {args.k}-fold cross-validation...")
 
-    folds = create_dataloaders(
-        dataset=dataset,
-        k_folder=args.k,
-        batch_size=args.batch_size,
-        shuffle=True,
-        split_seed=args.split_seed,
-        inner_split=args.inner_splits,
-        num_workers=args.num_workers,
-        pin_memory=args.pin_memory and torch.cuda.is_available(),
-    )
+    if use_windowing:
+        folds = create_windowed_dataloaders(
+            dataset=dataset,
+            k_folder=args.k,
+            batch_size=args.batch_size,
+            shuffle=True,
+            split_seed=args.split_seed,
+            inner_split=args.inner_splits,
+            window_samples=window_samples,
+            stride=stride,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_memory and torch.cuda.is_available(),
+        )
+    else:
+        folds = create_dataloaders(
+            dataset=dataset,
+            k_folder=args.k,
+            batch_size=args.batch_size,
+            shuffle=True,
+            split_seed=args.split_seed,
+            inner_split=args.inner_splits,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_memory and torch.cuda.is_available(),
+        )
 
     out_dir = build_out_dir(args)
     plots_dir = out_dir / "plots"
@@ -248,6 +316,13 @@ def main():
     config["n_channels"] = n_channels
     config["n_classes"] = n_classes
     config["tensor_shape"] = list(dataset.samples[0]["eeg"].shape)
+    if use_windowing:
+        config["windowing"] = {
+            "window_sec": args.window_sec,
+            "overlap": args.overlap,
+            "window_samples": window_samples,
+            "stride": stride,
+        }
     save_json(out_dir / "config.json", config)
 
     all_fold_metrics: list[dict] = []
@@ -261,9 +336,17 @@ def main():
     for fold_id, (train_loader, val_loader, test_loader) in enumerate(folds):
         print(f"\n{'='*50}")
         print(f"Fold {fold_id:02d}/{args.k - 1:02d}")
-        print(f"  Train: {len(train_loader.dataset)} subjects")
-        print(f"  Val:   {len(val_loader.dataset)} subjects")
-        print(f"  Test:  {len(test_loader.dataset)} subjects")
+        if use_windowing:
+            print(f"  Train: {len(train_loader.dataset)} windows "
+                  f"(~{len(train_loader.dataset) // max(len(train_loader.dataset.names), 1)}/subj)")
+            print(f"  Val:   {len(val_loader.dataset)} windows "
+                  f"(~{len(val_loader.dataset) // max(len(val_loader.dataset.names), 1)}/subj)")
+            print(f"  Test:  {len(test_loader.dataset)} windows "
+                  f"(~{len(test_loader.dataset) // max(len(test_loader.dataset.names), 1)}/subj)")
+        else:
+            print(f"  Train: {len(train_loader.dataset)} subjects")
+            print(f"  Val:   {len(val_loader.dataset)} subjects")
+            print(f"  Test:  {len(test_loader.dataset)} subjects")
 
         set_seed(args.init_seed + fold_id)
         model = build_model(args, n_channels=n_channels, n_classes=n_classes)
@@ -334,8 +417,18 @@ def main():
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
 
-        y_true_val, y_pred_val, _ = evaluate(model, val_loader, device)
-        y_true_test, y_pred_test, test_metrics = evaluate(model, test_loader, device)
+        if use_windowing:
+            y_true_val, y_pred_val, val_metrics, val_subjects = evaluate_subject_level(
+                model, val_loader, device)
+            y_true_test, y_pred_test, test_metrics, test_subjects = evaluate_subject_level(
+                model, test_loader, device)
+            print(f"  Val (subject-level, majority vote):")
+            for k, v in val_metrics.items():
+                print(f"    {k}: {v:.4f}")
+            print(f"  Test (subject-level, majority vote):")
+        else:
+            y_true_val, y_pred_val, _ = evaluate(model, val_loader, device)
+            y_true_test, y_pred_test, test_metrics = evaluate(model, test_loader, device)
 
         print(f"  Test results:")
         for metric_name, value in test_metrics.items():
@@ -352,8 +445,11 @@ def main():
         }
         all_fold_metrics.append(fold_metrics)
 
+        pred_names_val = val_subjects if use_windowing else val_loader.dataset.names
+        pred_names_test = test_subjects if use_windowing else test_loader.dataset.names
+
         for name, true_label, pred_label in zip(
-            val_loader.dataset.names, y_true_val, y_pred_val
+            pred_names_val, y_true_val, y_pred_val
         ):
             all_predictions.append({
                 "fold": fold_id,
@@ -364,7 +460,7 @@ def main():
             })
 
         for name, true_label, pred_label in zip(
-            test_loader.dataset.names, y_true_test, y_pred_test
+            pred_names_test, y_true_test, y_pred_test
         ):
             all_predictions.append({
                 "fold": fold_id,

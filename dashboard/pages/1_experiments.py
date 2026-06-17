@@ -52,7 +52,9 @@ with tab_struct:
     n_cls = cfg.get("n_classes", 2)
     duration = cfg.get("duration_sec", 120.0)
     fs = cfg.get("target_fs", None) or 250
-    T = int(duration * fs)
+    win = cfg.get("windowing", None)
+    use_win = win is not None
+    T = win["window_samples"] if use_win else int(duration * fs)
 
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -72,10 +74,23 @@ with tab_struct:
 
     with col_diag:
         st.markdown("##### End-to-End Pipeline")
-        pipes = [
-            ("Raw EEG", f"{n_ch} ch × {T} samples\n({duration}s @ {fs}Hz)", "#636efa",
-             "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
-            ("Temporal Conv", f"Conv2d 1 → {cfg.get('F1',8)}\nkernel=(1,63)\nBatchNorm", "#00cc96",
+        pipes = []
+        if use_win:
+            n_win = f"~{int(duration * fs / win['stride'])}/subj"
+            pipes.append(
+                ("Raw EEG", f"{n_ch} ch × {int(duration*fs)} samples\n({duration}s @ {fs}Hz)", "#636efa",
+                 "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
+            )
+            pipes.append(
+                ("Windowing", f"{win['window_sec']}s windows\n{win['window_samples']} samples\n{n_win}", "#b6a2d6",
+                 f"→ ({n_ch}, {win['window_samples']})\noverlap {win['overlap']:.0%}"),
+            )
+        else:
+            pipes.append(
+                ("Raw EEG", f"{n_ch} ch × {T} samples\n({duration}s @ {fs}Hz)", "#636efa",
+                 "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
+            )
+        pipes += [
              f"→ ({cfg.get('F1',8)}, {n_ch}, {T})"),
             ("Depthwise Spatial", f"DepthConv {cfg.get('F1',8)} → {cfg.get('F1',8)*cfg.get('D',2)}\n"
              f"kernel=({n_ch},1) groups={cfg.get('F1',8)}", "#ef553b",
@@ -90,12 +105,14 @@ with tab_struct:
              f"logits → softmax"),
         ]
 
+        n_pipes = len(pipes)
         fig = go.Figure()
         fig.update_layout(showlegend=False, xaxis=dict(visible=False, range=[-1.5, 1.5]),
-                          yaxis=dict(visible=False, range=[-1, 6.5]), height=580,
+                          yaxis=dict(visible=False, range=[-1, n_pipes - 0.5]),
+                          height=420 + n_pipes * 30,
                           margin=dict(l=10, r=10, t=10, b=10),
                           plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        y_positions = [6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0]
+        y_positions = [n_pipes - i - 0.5 for i in range(n_pipes)]
         for i, (name, inner, color, out) in enumerate(pipes):
             yc = y_positions[i]
             bw, bh = 1.4, 0.45
@@ -122,7 +139,12 @@ with tab_struct:
         st.markdown(f"**Architecture:** {sel_m}")
         st.markdown(f"**Version:** {sel_v}")
         st.markdown(f"**Parameters:** Total **{total_p:,}** | Trainable **{train_p:,}**")
-        st.markdown(f"**Input:** {n_ch} ch × {T} samples ({duration}s)")
+        if use_win:
+            st.markdown(f"**Input (window):** {n_ch} ch × {T} samples ({win['window_sec']}s)")
+            st.markdown(f"**Windowing:** {win['window_sec']}s windows, "
+                        f"{'no overlap' if win['overlap']==0 else f'{win[\"overlap\"]:.0%} overlap'}")
+        else:
+            st.markdown(f"**Input:** {n_ch} ch × {T} samples ({duration}s)")
         st.markdown(f"**Output:** {n_cls} classes")
 
         if results and results.get("overall"):
@@ -173,7 +195,8 @@ with tab_struct:
 
     with tab_int:
         with st.expander("Input", expanded=False):
-            st.dataframe([{"Module": "Input", "Input Shape": f"(B, {n_ch}, {T})",
+            in_shape = f"(batch=windows, {n_ch}, {T})" if use_win else f"(B, {n_ch}, {T})"
+            st.dataframe([{"Module": "Input", "Input Shape": in_shape,
                            "Output Shape": "—", "Params": 0}],
                          use_container_width=True, hide_index=True)
 
@@ -244,8 +267,9 @@ with tab_struct:
         )
         lines.append(sep)
 
+        in_shape_log = f"(windows, {n_ch}, {T})" if use_win else f"(B, {n_ch}, {T})"
         lines.append(
-            f"{'Input':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{f'(B, {n_ch}, {T})':<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
+            f"{'Input':<{BLOCK_WIDTH}}{'':<{COL_GAP}}{in_shape_log:<{IN_WIDTH}}{'':<{COL_GAP}}{'-':<{OUT_WIDTH}}{'':<{COL_GAP}}{'0':<{PARAM_WIDTH}}"
         )
 
         skip_containers = {"temporal_block", "spatial_block", "separable_block", "eegnet"}
