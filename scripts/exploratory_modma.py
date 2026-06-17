@@ -42,7 +42,7 @@ plt.rcParams.update({
 
 
 def log(msg: str) -> None:
-    print(msg)
+    print(msg.encode("utf-8", errors="replace").decode("utf-8", errors="replace"))
     with open(REPORT_PATH, "a", encoding="utf-8") as f:
         f.write(msg + "\n")
 
@@ -239,7 +239,7 @@ def analyze_psd(ds, sfreq: float):
         for cls in (0, 1):
             p = psd_all[cls]
             mask = (p["freqs"] >= lo) & (p["freqs"] <= hi)
-            bp = np.trapz(p["mean_psd"][:, mask], p["freqs"][mask], axis=1)
+            bp = np.trapezoid(p["mean_psd"][:, mask], p["freqs"][mask], axis=1)
             row[f"{CLASS_NAMES[cls]}_mean"] = np.mean(bp)
             row[f"{CLASS_NAMES[cls]}_std"] = np.std(bp)
         band_power_rows.append(row)
@@ -276,8 +276,8 @@ def analyze_psd(ds, sfreq: float):
 
     channel_ratios = []
     for ch in range(n_channels):
-        bp_hc = np.trapz(psd_all[0]["mean_psd"][ch, mask], freqs[mask])
-        bp_mdd = np.trapz(psd_all[1]["mean_psd"][ch, mask], freqs[mask])
+        bp_hc = np.trapezoid(psd_all[0]["mean_psd"][ch, mask], freqs[mask])
+        bp_mdd = np.trapezoid(psd_all[1]["mean_psd"][ch, mask], freqs[mask])
         ratio = bp_mdd / max(bp_hc, 1e-12)
         channel_ratios.append({"channel": ch_names[ch], "hc_power": bp_hc,
                                "mdd_power": bp_mdd, "ratio_mdd_hc": ratio})
@@ -331,14 +331,20 @@ def analyze_demographics():
         log("  participants.tsv not found, skipping demographics")
         return
 
-    df = pd.read_csv(tsv_path, sep="\t")
-    df.columns = [c.replace("\uff08", "(").replace("\uff09", ")") for c in df.columns]
+    raw = pd.read_csv(tsv_path, sep="\t", header=None, skiprows=1, dtype=str)
+    col_map = {
+        0: "participant_id", 2: "gender", 3: "age", 5: "education(years)",
+        6: "group", 7: "PHQ-9", 8: "GAD-7", 9: "PSQI",
+    }
+    df = pd.DataFrame()
+    for col_idx, col_name in col_map.items():
+        if col_idx < raw.shape[1]:
+            df[col_name] = raw[col_idx]
+    for col in df.columns:
+        if col in ("participant_id", "group", "gender"):
+            continue
+        df[col] = pd.to_numeric(df[col], errors="coerce")
     log("  Columns: %s" % str(list(df.columns)))
-
-    num_cols_all = ["age", "education(years)", "PHQ-9", "GAD-7", "PSQI"]
-    for col in num_cols_all:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     log("\n" + "=" * 60)
     log("DEMOGRAPHICS")
@@ -347,6 +353,11 @@ def analyze_demographics():
     if "group" in df.columns:
         log("  group:")
         for val, cnt in df["group"].value_counts().items():
+            log(f"    {val}: {cnt}")
+
+    if "gender" in df.columns:
+        log("  gender:")
+        for val, cnt in df["gender"].value_counts().items():
             log(f"    {val}: {cnt}")
 
     for col in df.columns:
@@ -359,7 +370,7 @@ def analyze_demographics():
 
     df.to_csv(OUTPUT_DIR / "demographics.csv", index=False)
 
-    if "age" in df.columns and "group" in df.columns:
+    if "age" in df.columns and "group" in df.columns and df["age"].notna().any():
         fig, ax = plt.subplots(figsize=(8, 4))
         for grp_name, color in [("HC", CLASS_COLORS[0]), ("MDD", CLASS_COLORS[1])]:
             sub = df[df["group"] == grp_name]["age"].dropna()
@@ -368,7 +379,8 @@ def analyze_demographics():
         ax.set_xlabel("Age")
         ax.set_ylabel("Count")
         ax.set_title("Age Distribution by Group")
-        ax.legend()
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend()
         sns.despine()
         fig.tight_layout()
         fig.savefig(PLOTS_DIR / "age_distribution.png")
@@ -382,6 +394,7 @@ def analyze_demographics():
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    REPORT_PATH.write_text("", encoding="utf-8")
 
     sns.set_style("whitegrid")
 
