@@ -1,0 +1,198 @@
+{
+  "config": {
+    "root": null,
+    "condition": "EC",
+    "k": 5,
+    "inner_splits": 5,
+    "batch_size": 16,
+    "lr": 0.001,
+    "epochs": 100,
+    "patience": 15,
+    "lowcut": 0.5,
+    "highcut": 60.0,
+    "notch": 50.0,
+    "target_fs": null,
+    "duration_sec": 120.0,
+    "F1": 8,
+    "D": 2,
+    "F2": 16,
+    "pool1": 8,
+    "pool2": 8,
+    "dropout": 0.5,
+    "meanmax_alpha": 0.0,
+    "weight_decay": 0.0,
+    "lr_scheduler": false,
+    "lr_patience": 5,
+    "lr_factor": 0.5,
+    "split_seed": 3407,
+    "init_seed": 3001,
+    "num_workers": 0,
+    "pin_memory": false,
+    "run_name": null,
+    "model": "csp_lda",
+    "model_name": null,
+    "version_name": "window",
+    "window_sec": 2.0,
+    "overlap": 0.5,
+    "device": "cuda",
+    "n_channels": 128,
+    "n_classes": 2,
+    "tensor_shape": [
+      128,
+      30000
+    ],
+    "windowing": {
+      "window_sec": 2.0,
+      "overlap": 0.5,
+      "window_samples": 500,
+      "stride": 250
+    }
+  },
+  "fold_metrics": [
+    {
+      "fold": 0,
+      "best_epoch": 0,
+      "n_epochs": 1,
+      "val_accuracy": 0.7777777777777778,
+      "val_balanced_accuracy": 0.75,
+      "val_f1_macro": 0.75,
+      "test_accuracy": 0.2727272727272727,
+      "test_balanced_accuracy": 0.2833333333333333,
+      "test_f1_macro": 0.26666666666666666
+    },
+    {
+      "fold": 1,
+      "best_epoch": 0,
+      "n_epochs": 1,
+      "val_accuracy": 0.5555555555555556,
+      "val_balanced_accuracy": 0.575,
+      "val_f1_macro": 0.55,
+      "test_accuracy": 0.5454545454545454,
+      "test_balanced_accuracy": 0.5166666666666667,
+      "test_f1_macro": 0.47619047619047616
+    },
+    {
+      "fold": 2,
+      "best_epoch": 0,
+      "n_epochs": 1,
+      "val_accuracy": 0.3333333333333333,
+      "val_balanced_accuracy": 0.325,
+      "val_f1_macro": 0.325,
+      "test_accuracy": 0.8,
+      "test_balanced_accuracy": 0.8,
+      "test_f1_macro": 0.7916666666666667
+    },
+    {
+      "fold": 3,
+      "best_epoch": 0,
+      "n_epochs": 1,
+      "val_accuracy": 0.3333333333333333,
+      "val_balanced_accuracy": 0.35,
+      "val_f1_macro": 0.325,
+      "test_accuracy": 0.7272727272727273,
+      "test_balanced_accuracy": 0.7166666666666667,
+      "test_f1_macro": 0.717948717948718
+    },
+    {
+      "fold": 4,
+      "best_epoch": 0,
+      "n_epochs": 1,
+      "val_accuracy": 0.5,
+      "val_balanced_accuracy": 0.5,
+      "val_f1_macro": 0.4666666666666667,
+      "test_accuracy": 0.7,
+      "test_balanced_accuracy": 0.6666666666666667,
+      "test_f1_macro": 0.6703296703296704
+    }
+  ],
+  "overall": {
+    "mean_accuracy": 0.6090909090909091,
+    "std_accuracy": 0.20968295626674174,
+    "mean_balanced_accuracy": 0.5966666666666667,
+    "std_balanced_accuracy": 0.20323768242025286,
+    "mean_f1_macro": 0.5845604395604396,
+    "std_f1_macro": 0.21262777503759675
+  },
+  "fold_data": [
+    {
+      "fold_id": 0,
+      "best_epoch": 0,
+      "train_losses": [
+        0.0
+      ],
+      "val_losses": [
+        0.0
+      ],
+      "train_accs": [
+        0.0
+      ],
+      "val_accs": [
+        0.0
+      ]
+    },
+    {
+      "fold_id": 1,
+      "best_epoch": 0,
+      "train_losses": [
+        0.0
+      ],
+      "val_losses": [
+        0.0
+      ],
+      "train_accs": [
+        0.0
+      ],
+      "val_accs": [
+        0.0
+      ]
+    },
+    {
+      "fold_id": 2,
+      "best_epoch": 0,
+      "train_losses": [
+        0.0
+      ],
+      "val_losses": [
+        0.0
+      ],
+      "train_accs": [
+        0.0
+      ],
+      "val_accs": [
+        0.0
+      ]
+    },
+    {
+      "fold_id": 3,
+      "best_epoch": 0,
+      "train_losses": [
+        0.0
+      ],
+      "val_losses": [
+        0.0
+      ],
+      "train_accs": [
+        0.0
+      ],
+      "val_accs": [
+        0.0
+      ]
+    },
+    {
+      "fold_id": 4,
+      "best_epoch": 0,
+      "train_losses": [
+        0.0
+      ],
+      "val_losses": [
+        0.0
+      ],
+      "train_accs": [
+        0.0
+      ],
+      "val_accs": [
+        0.0
+      ]
+    }
+  ]
+}
