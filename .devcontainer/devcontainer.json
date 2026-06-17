@@ -1,0 +1,33 @@
+{
+    "name": "MultimodalAnalysis",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "workspaceFolder": "/workspace",
+    "runArgs": [
+        "--gpus",
+        "all"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-toolsai.jupyter"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/opt/conda/bin/python",
+                "python.terminal.activateEnvironment": false
+            }
+        }
+    },
+    "postCreateCommand": "pip install --no-cache-dir -e .",
+    "forwardPorts": [8501],
+    "portsAttributes": {
+        "8501": {
+            "label": "Streamlit Dashboard",
+            "onAutoForward": "notify"
+        }
+    }
+}
