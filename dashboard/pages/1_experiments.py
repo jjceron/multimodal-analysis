@@ -91,6 +91,7 @@ with tab_struct:
                  "Bandpass [0.5–60] Hz\nNotch 50 Hz\nAverage Ref"),
             )
         pipes += [
+            ("Temporal Conv", f"Conv2d 1 → {cfg.get('F1',8)}\nkernel=(1,63)\nBatchNorm", "#00cc96",
              f"→ ({cfg.get('F1',8)}, {n_ch}, {T})"),
             ("Depthwise Spatial", f"DepthConv {cfg.get('F1',8)} → {cfg.get('F1',8)*cfg.get('D',2)}\n"
              f"kernel=({n_ch},1) groups={cfg.get('F1',8)}", "#ef553b",
@@ -141,8 +142,9 @@ with tab_struct:
         st.markdown(f"**Parameters:** Total **{total_p:,}** | Trainable **{train_p:,}**")
         if use_win:
             st.markdown(f"**Input (window):** {n_ch} ch × {T} samples ({win['window_sec']}s)")
+            ov_pct = f"{win['overlap']:.0%}"
             st.markdown(f"**Windowing:** {win['window_sec']}s windows, "
-                        f"{'no overlap' if win['overlap']==0 else f'{win[\"overlap\"]:.0%} overlap'}")
+                        f"{'no overlap' if win['overlap']==0 else ov_pct + ' overlap'}")
         else:
             st.markdown(f"**Input:** {n_ch} ch × {T} samples ({duration}s)")
         st.markdown(f"**Output:** {n_cls} classes")
