@@ -91,7 +91,9 @@ def plot_fold_training_curves(
 
     max_len = max(len(fd["train_losses"]) for fd in fold_data)
     loss_sum = np.zeros((max_len, 2))
+    loss_count = np.zeros((max_len, 2), dtype=int)
     acc_sum = np.zeros((max_len, 2))
+    acc_count = np.zeros((max_len, 2), dtype=int)
 
     for i, fd in enumerate(fold_data):
         fold_id = fd.get("fold_id", i)
@@ -113,6 +115,8 @@ def plot_fold_training_curves(
         vl = np.array(fd["val_losses"])
         loss_sum[:len(tl), 0] += tl
         loss_sum[:len(vl), 1] += vl
+        loss_count[:len(tl), 0] += 1
+        loss_count[:len(vl), 1] += 1
 
         if has_metric and fd.get("train_accs") and fd.get("val_accs"):
             fig_metric.add_trace(go.Scatter(
@@ -129,9 +133,11 @@ def plot_fold_training_curves(
             va = np.array(fd["val_accs"])
             acc_sum[:len(ta), 0] += ta
             acc_sum[:len(va), 1] += va
+            acc_count[:len(ta), 0] += 1
+            acc_count[:len(va), 1] += 1
 
     if n_folds > 1:
-        mean_loss = loss_sum / n_folds
+        mean_loss = loss_sum / np.maximum(loss_count, 1)
         mean_epochs = list(range(1, max_len + 1))
 
         fig_loss.add_trace(go.Scatter(
@@ -146,7 +152,7 @@ def plot_fold_training_curves(
         ))
 
         if has_metric:
-            mean_acc = acc_sum / n_folds
+            mean_acc = acc_sum / np.maximum(acc_count, 1)
             fig_metric.add_trace(go.Scatter(
                 x=mean_epochs, y=mean_acc[:, 0], mode="lines",
                 name="Mean (train)", line=dict(color="black", width=3),
