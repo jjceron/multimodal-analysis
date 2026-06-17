@@ -103,7 +103,7 @@ class CSPLDA(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Riemannian MDM
+# Riemannian TangentSpace + LogisticRegression (replaces slow MDM)
 # ---------------------------------------------------------------------------
 class RiemannianMDM(nn.Module):
     _is_sklearn = True
@@ -116,12 +116,15 @@ class RiemannianMDM(nn.Module):
         super().__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
-        self.mdm: nn.Module | None = None
-        self.fitted = False
-
-    def _compute_covs(self, X: np.ndarray) -> np.ndarray:
+        from sklearn.linear_model import LogisticRegression
         from pyriemann.estimation import Covariances
-        return Covariances(estimator='lwf').transform(X)
+        from pyriemann.tangentspace import TangentSpace
+        self.pipeline = Pipeline([
+            ("cov", Covariances(estimator='lwf')),
+            ("ts", TangentSpace()),
+            ("clf", LogisticRegression(max_iter=1000)),
+        ])
+        self.fitted = False
 
     def _collect(self, loader, device=None) -> tuple[np.ndarray, np.ndarray]:
         X_list, y_list = [], []
@@ -132,20 +135,15 @@ class RiemannianMDM(nn.Module):
         return np.concatenate(X_list, axis=0), np.concatenate(y_list, axis=0)
 
     def fit(self, train_loader, device=None) -> None:
-        from pyriemann.classification import MDM
-
         X, y = self._collect(train_loader)
-        covs = self._compute_covs(X)
-        self.mdm = MDM()
-        self.mdm.fit(covs, y)
+        self.pipeline.fit(X, y)
         self.fitted = True
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, None]:
         if not self.fitted:
             return torch.zeros(x.size(0), self.n_classes), None
         X = _to_numpy(x)
-        covs = self._compute_covs(X)
-        probs = self.mdm.predict_proba(covs)
+        probs = self.pipeline.predict_proba(X)
         logits = torch.log(torch.tensor(probs, dtype=torch.float32) + 1e-10)
         return logits, None
 
