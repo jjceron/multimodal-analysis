@@ -343,6 +343,7 @@ def save_json(path: Path, payload: dict) -> None:
 def main():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.cuda.empty_cache()
 
     print(f"Device: {device}")
     print(f"Loading MODMA dataset...")
@@ -404,9 +405,9 @@ def main():
             pin_memory=args.pin_memory and torch.cuda.is_available(),
         )
 
-    HEAVY_MODELS = {"eegconformer", "cnn_lstm"}
+    HEAVY_MODELS = {"eegconformer", "cnn_lstm", "shallowconvnet"}
     if args.model.lower() in HEAVY_MODELS and args.window_sec == 0:
-        safe_bs = min(args.batch_size, 4)
+        safe_bs = min(args.batch_size, 2)
         if safe_bs < args.batch_size:
             print(f"  [Auto-batch] Reducing batch_size {args.batch_size} -> {safe_bs} for {args.model} on full signal")
             args.batch_size = safe_bs
