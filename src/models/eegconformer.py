@@ -8,10 +8,10 @@ from torch import Tensor
 class PatchEmbedding(nn.Module):
     def __init__(
         self,
-        emb_size: int = 32,
+        emb_size: int = 24,
         num_channels: int = 22,
         temporal_kernel: int = 25,
-        num_filters: int = 32,
+        num_filters: int = 24,
         pool_kernel: int = 75,
         pool_stride: int = 15,
         dropout: float = 0.5,
@@ -85,8 +85,8 @@ class EEGConformer(nn.Module):
         pool_kernel: int = 75,
         pool_stride: int = 15,
         num_heads: int = 4,
-        dim_feedforward: int = 128,
-        num_layers: int = 4,
+        dim_feedforward: int = 96,
+        num_layers: int = 3,
         num_classes: int = 4,
         dropout: float = 0.5,
     ) -> None:
