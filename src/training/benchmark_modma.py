@@ -14,7 +14,10 @@ import torch.nn as nn
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
 from src.datasets.modma_db import MODMADataset, create_dataloaders, create_windowed_dataloaders, DEFAULT_ROOT
-from src.models import EEGNet, EEGFormer, CSPLDA, RiemannianMDM, BandPowerSVM
+from src.models import (
+    BandPowerSVM, CNNLSTM, CSPLDA, EEGConformer, EEGFormer, EEGNet,
+    RiemannianMDM, ShallowConvNet,
+)
 from src.utils.plotting import save_fold_figures, plot_dual_confusion_matrix
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -72,7 +75,9 @@ def parse_args():
 
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--model", type=str, default="eegnet",
-                        choices=["eegnet", "eegformer", "csp_lda", "riemann_mdm", "bandpower_svm"],
+                        choices=["eegnet", "eegformer", "eegconformer",
+                                 "shallowconvnet", "cnn_lstm",
+                                 "csp_lda", "riemann_mdm", "bandpower_svm"],
                         help="Model architecture")
     parser.add_argument("--model-name", type=str, default=None,
                         help="Override directory name (default: capitalized --model)")
@@ -268,20 +273,17 @@ def evaluate_subject_level(
 def build_model(args, n_channels: int, n_classes: int) -> nn.Module:
     model_key = args.model.lower()
 
-    if model_key in ("csp_lda", "riemann_mdm", "bandpower_svm"):
-        if model_key == "csp_lda":
-            return CSPLDA(n_channels=n_channels, n_classes=n_classes)
-        elif model_key == "riemann_mdm":
-            return RiemannianMDM(n_channels=n_channels, n_classes=n_classes)
-        else:
-            return BandPowerSVM(n_channels=n_channels, n_classes=n_classes,
-                                window_sec=max(args.window_sec, 2.0))
+    if model_key == "csp_lda":
+        return CSPLDA(n_channels=n_channels, n_classes=n_classes)
+    elif model_key == "riemann_mdm":
+        return RiemannianMDM(n_channels=n_channels, n_classes=n_classes)
+    elif model_key == "bandpower_svm":
+        return BandPowerSVM(n_channels=n_channels, n_classes=n_classes,
+                            window_sec=max(args.window_sec, 2.0))
 
     sfreq = 250.0
-    if getattr(args, 'window_sec', 0.0) > 0:
-        n_samples = int(round(args.window_sec * sfreq))
-    else:
-        n_samples = int(round(getattr(args, 'duration_sec', 120.0) * sfreq))
+    use_win = getattr(args, 'window_sec', 0.0) > 0
+    n_samples = int(round((args.window_sec if use_win else args.duration_sec) * sfreq))
 
     pool1, pool2 = auto_adjust_pooling(
         n_samples, args.pool1, args.pool2, args.model,
@@ -289,28 +291,42 @@ def build_model(args, n_channels: int, n_classes: int) -> nn.Module:
 
     if model_key == "eegnet":
         return EEGNet(
-            n_channels=n_channels,
-            n_classes=n_classes,
+            n_channels=n_channels, n_classes=n_classes,
             F1=args.F1, D=args.D, F2=args.F2,
             pool1=pool1, pool2=pool2,
-            dropout=args.dropout,
-            meanmax_alpha=args.meanmax_alpha,
+            dropout=args.dropout, meanmax_alpha=args.meanmax_alpha,
         )
-    else:
+    elif model_key == "eegformer":
         base = EEGFormer(
-            n_channels=n_channels,
-            n_samples=n_samples,
-            num_classes=n_classes,
+            n_channels=n_channels, n_samples=n_samples, num_classes=n_classes,
             F1=args.F1, D=args.D, F2=args.F2,
-            pool1=pool1, pool2=pool2,
-            dropout_eeg=args.dropout,
+            pool1=pool1, pool2=pool2, dropout_eeg=args.dropout,
         )
         return _ModelAdapter(base)
+    elif model_key == "eegconformer":
+        base = EEGConformer(
+            num_channels=n_channels, n_samples=n_samples, num_classes=n_classes,
+            dropout=args.dropout,
+        )
+        return _ModelAdapter(base)
+    elif model_key == "shallowconvnet":
+        return _ModelAdapter(ShallowConvNet(
+            n_channels=n_channels, n_classes=n_classes, n_samples=n_samples,
+            dropout=args.dropout,
+        ))
+    elif model_key == "cnn_lstm":
+        return _ModelAdapter(CNNLSTM(
+            n_channels=n_channels, n_classes=n_classes, n_samples=n_samples,
+            dropout=args.dropout,
+        ))
+
+    raise ValueError(f"Unknown model: {args.model}")
 
 
 def build_out_dir(args) -> Path:
     NAME_MAP = {
-        "eegnet": "EEGNet", "eegformer": "EEGFormer",
+        "eegnet": "EEGNet", "eegformer": "EEGFormer", "eegconformer": "EEGConformer",
+        "shallowconvnet": "ShallowConvNet", "cnn_lstm": "CNNLSTM",
         "csp_lda": "CSPLDA", "riemann_mdm": "RiemannianMDM", "bandpower_svm": "BandPowerSVM",
     }
     model_name = args.model_name or NAME_MAP.get(args.model.lower(), args.model.capitalize())
