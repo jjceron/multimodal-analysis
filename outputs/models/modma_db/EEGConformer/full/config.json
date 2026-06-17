@@ -3,7 +3,7 @@
   "condition": "EC",
   "k": 5,
   "inner_splits": 5,
-  "batch_size": 2,
+  "batch_size": 4,
   "lr": 0.001,
   "epochs": 100,
   "patience": 15,
