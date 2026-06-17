@@ -381,9 +381,9 @@ def main():
         print(f"Windowing: {args.window_sec}s windows ({window_samples} samples), "
               f"stride={stride}, overlap={args.overlap:.0%}")
 
-    HEAVY_MODELS = {"eegconformer", "cnn_lstm", "shallowconvnet"}
-    if args.model.lower() in HEAVY_MODELS and args.window_sec == 0:
-        safe_bs = 1 if args.model.lower() in {"shallowconvnet", "cnn_lstm"} else min(args.batch_size, 2)
+    DEEP_MODELS = {"eegnet", "eegformer", "eegconformer", "shallowconvnet", "cnn_lstm"}
+    if args.model.lower() in DEEP_MODELS and args.window_sec == 0:
+        safe_bs = min(args.batch_size, 4)
         if safe_bs < args.batch_size:
             print(f"  [Auto-batch] Reducing batch_size {args.batch_size} -> {safe_bs} for {args.model} on full signal")
             args.batch_size = safe_bs
