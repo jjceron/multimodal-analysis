@@ -116,8 +116,8 @@ class RiemannianMDM(nn.Module):
         self.fitted = False
 
     def _compute_covs(self, X: np.ndarray) -> np.ndarray:
-        covs = np.array([_normalize_cov(x) for x in X])
-        return covs
+        from pyriemann.estimation import Covariances
+        return Covariances(estimator='lwf').transform(X)
 
     def _collect(self, loader, device=None) -> tuple[np.ndarray, np.ndarray]:
         X_list, y_list = [], []
