@@ -1,0 +1,2 @@
+mean_accuracy,std_accuracy,mean_balanced_accuracy,std_balanced_accuracy,mean_f1_macro,std_f1_macro
+0.4945454545454545,0.15462564764323836,0.48,0.15785013990068766,0.44412726162726157,0.160932033478436
