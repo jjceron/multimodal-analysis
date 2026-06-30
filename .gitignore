@@ -24,3 +24,9 @@ Thumbs.db
 
 # Logs (regenerable)
 *.log
+
+# Dev tools
+.venv/
+
+# Draft report (not for submission)
+docs/MES2_FUSION_MODMA_ACEMATE.md
