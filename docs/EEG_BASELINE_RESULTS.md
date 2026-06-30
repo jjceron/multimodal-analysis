@@ -2,6 +2,7 @@
 
 ## 1. Setup
 
+
 - **Task**: Binary classification MDD vs HC.
 - **Subjects**: 53 (24 MDD, 29 HC).
 - **Validation**: 5-fold Stratified Group K-Fold (subject-level, no leakage).

@@ -4,6 +4,7 @@
 
 Process 128-channel resting-state EEG recordings from the MODMA dataset, extract band power features, and prepare them for binary classification (MDD vs HC).
 
+
 ## 2. Data Description
 
 - **Subjects**: 53 (24 MDD, 29 HC).

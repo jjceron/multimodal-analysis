@@ -4,6 +4,7 @@
 
 Combine EEG band power, audio spectral features, and psychometric scales into a single feature matrix. Train classical ML classifiers with subject-level validation (no leakage). Evaluate whether multimodal fusion beats single-modality baselines.
 
+
 ## 2. Setup
 
 - **Subjects with all three modalities + labels**: 30

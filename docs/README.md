@@ -72,7 +72,7 @@ All validation uses **Stratified Group K-Fold (SGKF)** with the subject as group
 
 - Read participants.tsv (BIDS metadata with PHQ-9, GAD-7, PSQI)
 - Extract 6 variables: gender (binary), age, education, PHQ-9, GAD-7, PSQI
-- SimpleImputer (constant=0 for missing), then StandardScaler
+- SimpleImputer (constant=0 for missing), then StandardScaler 
 
 ### 4.5 Multimodal fusion
 
