@@ -30,3 +30,7 @@ Thumbs.db
 
 # Draft report (not for submission)
 docs/MES2_FUSION_MODMA_ACEMATE.md
+
+# Temporary / experimental scripts
+tmp/
+scripts/_*
