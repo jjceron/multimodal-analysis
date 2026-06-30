@@ -1,0 +1,221 @@
+{
+  "n_subjects": 53,
+  "n_MDD": 24,
+  "n_HC": 29,
+  "n_folds": 5,
+  "feature_dim": 320,
+  "models": {
+    "LogisticRegression": {
+      "mean": {
+        "accuracy": 0.40181818181818174,
+        "balanced_accuracy": 0.39666666666666667,
+        "f1_MDD": 0.34299589299589306,
+        "sensitivity": 0.34299589299589306,
+        "specificity": 0.4188811188811189
+      },
+      "std": {
+        "accuracy": 0.16747023912246475,
+        "balanced_accuracy": 0.1514375558880073,
+        "f1_MDD": 0.1241679317744527,
+        "sensitivity": 0.1241679317744527,
+        "specificity": 0.24886067346764068
+      },
+      "per_fold": [
+        {
+          "accuracy": 0.18181818181818182,
+          "balanced_accuracy": 0.2,
+          "f1_MDD": 0.3076923076923077,
+          "sensitivity": 0.3076923076923077,
+          "specificity": 0.0
+        },
+        {
+          "accuracy": 0.36363636363636365,
+          "balanced_accuracy": 0.35,
+          "f1_MDD": 0.2222222222222222,
+          "sensitivity": 0.2222222222222222,
+          "specificity": 0.46153846153846156
+        },
+        {
+          "accuracy": 0.7,
+          "balanced_accuracy": 0.6666666666666667,
+          "f1_MDD": 0.5714285714285714,
+          "sensitivity": 0.5714285714285714,
+          "specificity": 0.7692307692307693
+        },
+        {
+          "accuracy": 0.36363636363636365,
+          "balanced_accuracy": 0.3666666666666667,
+          "f1_MDD": 0.36363636363636365,
+          "sensitivity": 0.36363636363636365,
+          "specificity": 0.36363636363636365
+        },
+        {
+          "accuracy": 0.4,
+          "balanced_accuracy": 0.4,
+          "f1_MDD": 0.25,
+          "sensitivity": 0.25,
+          "specificity": 0.5
+        }
+      ]
+    },
+    "RandomForest": {
+      "mean": {
+        "accuracy": 0.5127272727272727,
+        "balanced_accuracy": 0.485,
+        "f1_MDD": 0.2958730158730159,
+        "sensitivity": 0.2958730158730159,
+        "specificity": 0.6210989010989011
+      },
+      "std": {
+        "accuracy": 0.17949423895540997,
+        "balanced_accuracy": 0.16703293088490065,
+        "f1_MDD": 0.189653248718041,
+        "sensitivity": 0.189653248718041,
+        "specificity": 0.15910387863770226
+      },
+      "per_fold": [
+        {
+          "accuracy": 0.2727272727272727,
+          "balanced_accuracy": 0.25,
+          "f1_MDD": 0.0,
+          "sensitivity": 0.0,
+          "specificity": 0.42857142857142855
+        },
+        {
+          "accuracy": 0.36363636363636365,
+          "balanced_accuracy": 0.35,
+          "f1_MDD": 0.2222222222222222,
+          "sensitivity": 0.2222222222222222,
+          "specificity": 0.46153846153846156
+        },
+        {
+          "accuracy": 0.7,
+          "balanced_accuracy": 0.625,
+          "f1_MDD": 0.4,
+          "sensitivity": 0.4,
+          "specificity": 0.8
+        },
+        {
+          "accuracy": 0.7272727272727273,
+          "balanced_accuracy": 0.7,
+          "f1_MDD": 0.5714285714285714,
+          "sensitivity": 0.5714285714285714,
+          "specificity": 0.8
+        },
+        {
+          "accuracy": 0.5,
+          "balanced_accuracy": 0.5,
+          "f1_MDD": 0.2857142857142857,
+          "sensitivity": 0.2857142857142857,
+          "specificity": 0.6153846153846154
+        }
+      ]
+    },
+    "SVM_RBF": {
+      "mean": {
+        "accuracy": 0.5472727272727272,
+        "balanced_accuracy": 0.5,
+        "f1_MDD": 0.0,
+        "sensitivity": 0.0,
+        "specificity": 0.7068627450980393
+      },
+      "std": {
+        "accuracy": 0.03170108322575035,
+        "balanced_accuracy": 0.0,
+        "f1_MDD": 0.0,
+        "sensitivity": 0.0,
+        "specificity": 0.02637965499426219
+      },
+      "per_fold": [
+        {
+          "accuracy": 0.5454545454545454,
+          "balanced_accuracy": 0.5,
+          "f1_MDD": 0.0,
+          "sensitivity": 0.0,
+          "specificity": 0.7058823529411765
+        },
+        {
+          "accuracy": 0.5454545454545454,
+          "balanced_accuracy": 0.5,
+          "f1_MDD": 0.0,
+          "sensitivity": 0.0,
+          "specificity": 0.7058823529411765
+        },
+        {
+          "accuracy": 0.6,
+          "balanced_accuracy": 0.5,
+          "f1_MDD": 0.0,
+          "sensitivity": 0.0,
+          "specificity": 0.75
+        },
+        {
+          "accuracy": 0.5454545454545454,
+          "balanced_accuracy": 0.5,
+          "f1_MDD": 0.0,
+          "sensitivity": 0.0,
+          "specificity": 0.7058823529411765
+        },
+        {
+          "accuracy": 0.5,
+          "balanced_accuracy": 0.5,
+          "f1_MDD": 0.0,
+          "sensitivity": 0.0,
+          "specificity": 0.6666666666666666
+        }
+      ]
+    },
+    "XGBoost": {
+      "mean": {
+        "accuracy": 0.5127272727272727,
+        "balanced_accuracy": 0.5116666666666666,
+        "f1_MDD": 0.44603174603174595,
+        "sensitivity": 0.44603174603174595,
+        "specificity": 0.5454545454545455
+      },
+      "std": {
+        "accuracy": 0.2281510301576205,
+        "balanced_accuracy": 0.22395436042987765,
+        "f1_MDD": 0.20055352980428046,
+        "sensitivity": 0.20055352980428046,
+        "specificity": 0.2794404194403844
+      },
+      "per_fold": [
+        {
+          "accuracy": 0.09090909090909091,
+          "balanced_accuracy": 0.1,
+          "f1_MDD": 0.16666666666666666,
+          "sensitivity": 0.16666666666666666,
+          "specificity": 0.0
+        },
+        {
+          "accuracy": 0.5454545454545454,
+          "balanced_accuracy": 0.5333333333333333,
+          "f1_MDD": 0.4444444444444444,
+          "sensitivity": 0.4444444444444444,
+          "specificity": 0.6153846153846154
+        },
+        {
+          "accuracy": 0.7,
+          "balanced_accuracy": 0.7083333333333333,
+          "f1_MDD": 0.6666666666666666,
+          "sensitivity": 0.6666666666666666,
+          "specificity": 0.7272727272727273
+        },
+        {
+          "accuracy": 0.7272727272727273,
+          "balanced_accuracy": 0.7166666666666667,
+          "f1_MDD": 0.6666666666666666,
+          "sensitivity": 0.6666666666666666,
+          "specificity": 0.7692307692307693
+        },
+        {
+          "accuracy": 0.5,
+          "balanced_accuracy": 0.5,
+          "f1_MDD": 0.2857142857142857,
+          "sensitivity": 0.2857142857142857,
+          "specificity": 0.6153846153846154
+        }
+      ]
+    }
+  }
+}
