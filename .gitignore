@@ -1,5 +1,6 @@
 # Raw data (too large, ethical constraints)
 data/raw/
+data/processed/
 
 # Python
 __pycache__/
