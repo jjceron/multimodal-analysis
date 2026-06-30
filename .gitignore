@@ -1,74 +1,25 @@
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
+# Raw data (too large, ethical constraints)
+data/raw/
 
-# Python cache
+# Python
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
 *.pyd
-*.egg
+.Python
 *.egg-info/
 dist/
 build/
-*.so
+.pytest_cache/
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Environment variables
-.env
-
-# IDEs
+# IDE
 .vscode/
 .idea/
 *.swp
-*.swo
 
-# OS generated files
+# OS
 .DS_Store
 Thumbs.db
 
-# Logs and temporary files
+# Logs (regenerable)
 *.log
-tmp/
-.pytest_cache/
-
-# --- Project Specific ---
-
-# Ignore all raw/processed data
-data/
-
-# Outputs: track benchmark results (json, csv), ignore plots and logs
-outputs/**/plots/
-outputs/**/*.png
-outputs/**/*.log
-
-# Ignore other datasets (only modma_db tracked)
-outputs/models/adhd_db/
-outputs/models/mdd_db/
-
-# Models: keep model result folders visible, but ignore heavy artifacts
-models/**/checkpoints/
-models/**/*.pt
-models/**/*.pth
-models/**/*.ckpt
-models/**/*.bin
-models/**/*.onnx
-
-
-# Optuna: keep the structure and summary files, but ignore all trial artifacts
-models/hbn_db/optuna/*
-!models/hbn_db/optuna/*/
-!models/hbn_db/optuna/**/*.csv
-!models/hbn_db/optuna/**/*.json
-
-# Ignore specific large file types that might appear anywhere
-*.pt
-*.pth
-*.ckpt
-*.gdf
-*.mat
-
