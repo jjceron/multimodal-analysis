@@ -2,7 +2,7 @@
 Deep Learning regression: EEGNet + MeanPool → MOT_V4, MOT, TOTAL
 LOSO evaluation with per-subject predictions
 """
-import glob, os, re, sys, warnings
+import glob, os, re, sys, argparse, warnings
 import numpy as np
 import pandas as pd
 import torch
@@ -236,7 +236,8 @@ def train_one_fold(train_cods, val_cods, test_cod, subjects, target, args):
         else:
             patience += 1
 
-        if epoch == 1 or epoch % 25 == 0 or patience == 0:
+        show = args.get('show_epoch', 5)
+        if epoch == 1 or epoch % show == 0 or patience == 0 or epoch == args['epochs']:
             tr_rmse = np.sqrt(tr_loss)
             vl_rmse = np.sqrt(vl_loss)
             print(f"  Ep {epoch:3d} | tr_loss={tr_loss:.4f} (rmse={tr_rmse:.2f}) | "
@@ -257,6 +258,21 @@ def train_one_fold(train_cods, val_cods, test_cod, subjects, target, args):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--batch-size', type=int, default=8)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--wd', type=float, default=1e-4)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--patience', type=int, default=10)
+    parser.add_argument('--dropout', type=float, default=0.5)
+    parser.add_argument('--show-epoch', type=int, default=5)
+    parser.add_argument('--quick', action='store_true')
+    args_ns = parser.parse_args()
+
+    if args_ns.quick:
+        args_ns.epochs = 5
+        args_ns.patience = 2
+
     print("="*70)
     print("  ACEMATE DEEP REGRESSION - EEGNet + MeanPool, LOSO")
     print("="*70+"\n")
@@ -269,7 +285,15 @@ def main():
     print(f"Ventanas: min={min(n_wins)}, max={max(n_wins)}, mean={np.mean(n_wins):.0f}")
     print()
 
-    args = {'batch_size': 8, 'lr': 1e-3, 'wd': 1e-4, 'epochs': 50, 'patience': 10, 'dropout': 0.5}
+    args = {
+        'batch_size': args_ns.batch_size,
+        'lr': args_ns.lr,
+        'wd': args_ns.wd,
+        'epochs': args_ns.epochs,
+        'patience': args_ns.patience,
+        'dropout': args_ns.dropout,
+        'show_epoch': args_ns.show_epoch,
+    }
 
     for target in ['MOT_V4', 'MOT', 'TOTAL']:
         # Filter subjects with valid target
